@@ -14,7 +14,10 @@
     "productName": "Claude Tray Notifier",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "dir"],
+      "target": [
+        "dmg",
+        "dir"
+      ],
       "icon": "build/icon.icns",
       "extendInfo": {
         "LSUIElement": true
@@ -33,10 +36,10 @@
     }
   },
   "dependencies": {
-    "menubar": "^9.4.0"
+    "menubar": "^5.2.3"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1"
   }
 }
