@@ -12,8 +12,10 @@ let mb;
 let token;
 
 function createTrayIcon(active = false) {
-  const iconName = active ? 'tray-active.png' : 'tray-idle.png';
-  return nativeImage.createFromPath(path.join(__dirname, 'assets', iconName));
+  const iconName = active ? 'tray-activeTemplate.png' : 'tray-idleTemplate.png';
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', iconName));
+  icon.setTemplateImage(true);
+  return icon;
 }
 
 function showNotification(payload) {

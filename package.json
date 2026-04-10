@@ -6,15 +6,19 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
-    "build:dmg": "electron-builder --mac dmg"
+    "build:dmg": "electron-builder --mac dmg",
+    "build:dir": "electron-builder --mac dir"
   },
   "build": {
     "appId": "ca.pezant.claude-tray-notifier",
     "productName": "Claude Tray Notifier",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg"],
-      "icon": "assets/icon.png"
+      "target": ["dmg", "dir"],
+      "icon": "build/icon.icns",
+      "extendInfo": {
+        "LSUIElement": true
+      }
     },
     "files": [
       "main.js",
@@ -23,7 +27,10 @@
       "index.html",
       "lib/**",
       "assets/**"
-    ]
+    ],
+    "directories": {
+      "output": "dist"
+    }
   },
   "dependencies": {
     "menubar": "^9.4.0"
