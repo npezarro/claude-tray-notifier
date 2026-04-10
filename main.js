@@ -1,4 +1,4 @@
-const { app, Notification, Tray, Menu, BrowserWindow, ipcMain } = require('electron');
+const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 const { createServer } = require('./lib/server');
 const { loadToken } = require('./lib/auth');
@@ -8,9 +8,26 @@ const PORT = 9377;
 const MAX_NOTIFICATIONS = 20;
 const notifications = [];
 
+// Tray states: idle (grayscale), listening (chartreuse), unread (orange)
+const TRAY_STATE = { IDLE: 'idle', LISTENING: 'listening', UNREAD: 'unread' };
+let currentState = TRAY_STATE.IDLE;
+let hasUnread = false;
+
 let tray = null;
-let window = null;
+let dropdownWindow = null;
 let token;
+
+function pandaIcon(state) {
+  const name = `panda-${state}.png`;
+  return nativeImage.createFromPath(path.join(__dirname, 'assets', name));
+}
+
+function setTrayState(state) {
+  currentState = state;
+  if (tray) {
+    tray.setImage(pandaIcon(state));
+  }
+}
 
 function showNotification(payload) {
   const isInputNeeded = payload.type === 'input_needed';
@@ -33,38 +50,41 @@ function showNotification(payload) {
     project: payload.project,
     summary: payload.summary || '',
     timestamp: payload.timestamp || new Date().toISOString(),
-    sessionId: payload.session_id
+    sessionId: payload.session_id,
+    read: false
   });
   if (notifications.length > MAX_NOTIFICATIONS) {
     notifications.length = MAX_NOTIFICATIONS;
   }
 
-  // Update tray title briefly to signal activity
-  if (tray) {
-    tray.setTitle(' !');
-    setTimeout(() => {
-      if (tray) tray.setTitle('');
-    }, 10000);
-  }
+  // Switch to unread (orange) panda
+  hasUnread = true;
+  setTrayState(TRAY_STATE.UNREAD);
 
   // Push update to renderer if window exists
-  if (window && !window.isDestroyed()) {
-    window.webContents.send('notifications-updated', notifications);
+  if (dropdownWindow && !dropdownWindow.isDestroyed()) {
+    dropdownWindow.webContents.send('notifications-updated', notifications);
   }
 }
 
+function markAllRead() {
+  for (const n of notifications) n.read = true;
+  hasUnread = false;
+  setTrayState(TRAY_STATE.LISTENING);
+}
+
 function toggleWindow() {
-  if (!window || window.isDestroyed()) {
+  if (!dropdownWindow || dropdownWindow.isDestroyed()) {
     createWindow();
-  } else if (window.isVisible()) {
-    window.hide();
+  } else if (dropdownWindow.isVisible()) {
+    dropdownWindow.hide();
   } else {
     showWindow();
   }
 }
 
 function createWindow() {
-  window = new BrowserWindow({
+  dropdownWindow = new BrowserWindow({
     width: 380,
     height: 420,
     show: false,
@@ -80,28 +100,31 @@ function createWindow() {
     }
   });
 
-  window.loadFile('index.html');
+  dropdownWindow.loadFile('index.html');
 
-  window.on('blur', () => {
-    if (window && !window.isDestroyed()) window.hide();
+  dropdownWindow.on('blur', () => {
+    if (dropdownWindow && !dropdownWindow.isDestroyed()) dropdownWindow.hide();
   });
 }
 
 function showWindow() {
-  if (!window || window.isDestroyed()) {
+  if (!dropdownWindow || dropdownWindow.isDestroyed()) {
     createWindow();
   }
 
   // Position window below the tray icon
   const trayBounds = tray.getBounds();
-  const windowBounds = window.getBounds();
+  const windowBounds = dropdownWindow.getBounds();
   const x = Math.round(trayBounds.x + (trayBounds.width / 2) - (windowBounds.width / 2));
   const y = Math.round(trayBounds.y + trayBounds.height + 4);
 
-  window.setPosition(x, y, false);
-  window.show();
-  window.focus();
-  window.webContents.send('notifications-updated', notifications);
+  dropdownWindow.setPosition(x, y, false);
+  dropdownWindow.show();
+  dropdownWindow.focus();
+  dropdownWindow.webContents.send('notifications-updated', notifications);
+
+  // Opening the dropdown marks notifications as read
+  markAllRead();
 }
 
 app.whenReady().then(() => {
@@ -117,9 +140,8 @@ app.whenReady().then(() => {
     return;
   }
 
-  // Create tray with text title instead of icon (reliable across all macOS versions)
-  tray = new Tray(path.join(__dirname, 'assets', 'tray-idleTemplate.png'));
-  tray.setTitle(' C');
+  // Create tray with grayscale panda (idle)
+  tray = new Tray(pandaIcon(TRAY_STATE.IDLE));
   tray.setToolTip('Claude Code Notifier');
 
   // Left click toggles the dropdown window
@@ -129,12 +151,18 @@ app.whenReady().then(() => {
 
   // Right click shows a simple context menu
   tray.on('right-click', () => {
+    const unreadCount = notifications.filter(n => !n.read).length;
     const contextMenu = Menu.buildFromTemplate([
       { label: `Claude Tray Notifier v${require('./package.json').version}`, enabled: false },
       { label: `Polling pezant.ca`, enabled: false },
       { type: 'separator' },
-      { label: `Notifications: ${notifications.length}`, enabled: false },
-      { label: 'Clear All', click: () => { notifications.length = 0; } },
+      { label: `${unreadCount} unread`, enabled: false },
+      { label: 'Mark All Read', click: () => markAllRead() },
+      { label: 'Clear All', click: () => {
+        notifications.length = 0;
+        hasUnread = false;
+        setTrayState(TRAY_STATE.LISTENING);
+      }},
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() }
     ]);
@@ -149,11 +177,17 @@ app.whenReady().then(() => {
     showNotification(payload);
   });
 
-  // Start polling pezant.ca relay for notifications from WSL2
+  // Start polling pezant.ca relay — go chartreuse once connected
   const poller = new Poller('https://pezant.ca', token, (payload) => {
     showNotification(payload);
   });
+  poller.onConnected = () => {
+    if (!hasUnread) setTrayState(TRAY_STATE.LISTENING);
+  };
   poller.start(2000);
+
+  // Switch to listening (chartreuse) after first successful connection
+  setTrayState(TRAY_STATE.LISTENING);
 
   console.log('Claude Tray Notifier ready');
   console.log(`Local server: 127.0.0.1:${PORT}`);
@@ -163,8 +197,10 @@ app.whenReady().then(() => {
 // IPC handlers
 ipcMain.on('clear-notifications', () => {
   notifications.length = 0;
-  if (window && !window.isDestroyed()) {
-    window.webContents.send('notifications-updated', notifications);
+  hasUnread = false;
+  setTrayState(TRAY_STATE.LISTENING);
+  if (dropdownWindow && !dropdownWindow.isDestroyed()) {
+    dropdownWindow.webContents.send('notifications-updated', notifications);
   }
 });
 
