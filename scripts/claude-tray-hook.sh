@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Claude Code hook script — POSTs to the tray notifier app
+# Claude Code hook script — POSTs to pezant.ca relay for the tray notifier
 # Usage: cat | claude-tray-hook.sh <stop|notification>
 set -uo pipefail
 
 EVENT_TYPE="${1:-stop}"
 TOKEN_PATH="$HOME/repos/privateContext/claude-tray-token"
-NOTIFY_URL="http://127.0.0.1:9377/notify"
+NOTIFY_URL="https://pezant.ca/tools/notify"
 
 # Read token — exit silently if missing
 TOKEN=$(cat "$TOKEN_PATH" 2>/dev/null || true)
@@ -39,13 +39,13 @@ PAYLOAD=$(jq -n \
   '{type:$type,session_id:$session_id,project:$project,cwd:$cwd,summary:$summary,timestamp:$timestamp}'
 )
 
-# POST to notifier — fail silently
+# POST to pezant.ca relay — fail silently
 curl -s -X POST "$NOTIFY_URL" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "$PAYLOAD" \
-  --connect-timeout 1 \
-  --max-time 3 \
+  --connect-timeout 3 \
+  --max-time 5 \
   -o /dev/null 2>/dev/null || true
 
 exit 0
