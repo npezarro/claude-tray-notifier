@@ -1,0 +1,35 @@
+{
+  "name": "claude-tray-notifier",
+  "version": "1.0.0",
+  "description": "macOS menu bar notifier for Claude Code CLI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "build:dmg": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "ca.pezant.claude-tray-notifier",
+    "productName": "Claude Tray Notifier",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"],
+      "icon": "assets/icon.png"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "lib/**",
+      "assets/**"
+    ]
+  },
+  "dependencies": {
+    "menubar": "^9.4.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
