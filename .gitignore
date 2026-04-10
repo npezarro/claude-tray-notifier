@@ -3,3 +3,7 @@ dist/
 .build/
 *.dmg
 .DS_Store
+.env
+.env.*
+*.pem
+*.key
