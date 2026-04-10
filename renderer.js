@@ -1,5 +1,15 @@
 const list = document.getElementById('list');
 
+const KIND_STYLES = {
+  choice:   { cls: 'type-choice',   icon: '◆' },
+  question: { cls: 'type-question', icon: '?' },
+  approval: { cls: 'type-approval', icon: '✓' },
+  error:    { cls: 'type-error',    icon: '!' },
+  attention:{ cls: 'type-input',    icon: '•' },
+  done:     { cls: 'type-done',     icon: '—' },
+  general:  { cls: 'type-done',     icon: '—' }
+};
+
 function formatTime(iso) {
   try {
     const d = new Date(iso);
@@ -16,16 +26,26 @@ function render(notifications) {
   }
 
   list.innerHTML = notifications.map(n => {
-    const typeClass = n.type === 'input_needed' ? 'type-input' : 'type-response';
-    const typeLabel = n.type === 'input_needed' ? 'Input Needed' : 'Done';
-    const summary = n.summary ? `<div class="summary">${escapeHtml(n.summary.slice(0, 120))}</div>` : '';
+    const kind = n.inputKind || 'general';
+    const style = KIND_STYLES[kind] || KIND_STYLES.general;
+    const kindLabel = n.kindLabel || 'Finished';
+    const title = escapeHtml(n.convTitle || n.project);
+    const unreadCls = n.read ? '' : ' unread';
+
+    const summary = n.summary
+      ? `<div class="summary">${escapeHtml(n.summary.slice(0, 120))}</div>`
+      : '';
+
     return `
-      <div class="notification">
+      <div class="notification${unreadCls}">
         <div class="top">
-          <span class="project">${escapeHtml(n.project)}</span>
+          <span class="conv-title">${title}</span>
           <span class="time">${formatTime(n.timestamp)}</span>
         </div>
-        <span class="type ${typeClass}">${typeLabel}</span>
+        <div class="meta">
+          <span class="type ${style.cls}">${style.icon} ${escapeHtml(kindLabel)}</span>
+          <span class="project-tag">${escapeHtml(n.project)}</span>
+        </div>
         ${summary}
       </div>
     `;

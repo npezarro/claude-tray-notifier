@@ -29,16 +29,34 @@ function setTrayState(state) {
   }
 }
 
-function showNotification(payload) {
-  const isInputNeeded = payload.type === 'input_needed';
-  const title = 'Claude Code';
-  let body;
+const INPUT_KIND_LABELS = {
+  choice: 'Waiting for your choice',
+  question: 'Has a question for you',
+  approval: 'Needs approval',
+  error: 'Hit an error',
+  attention: 'Needs attention',
+  done: 'Response ready',
+  general: 'Finished'
+};
 
-  if (isInputNeeded) {
-    body = `[${payload.project}] Input needed`;
-  } else {
+function showNotification(payload) {
+  const convTitle = payload.conv_title || payload.project;
+  const inputKind = payload.input_kind || 'general';
+  const kindLabel = INPUT_KIND_LABELS[inputKind] || INPUT_KIND_LABELS.general;
+
+  let title, body;
+  if (payload.type === 'input_needed') {
+    title = `${convTitle}`;
+    body = kindLabel;
+  } else if (inputKind === 'done' || inputKind === 'general') {
+    title = `${convTitle}`;
     const summary = payload.summary ? ` — ${payload.summary.slice(0, 100)}` : '';
-    body = `[${payload.project}] Response ready${summary}`;
+    body = `${kindLabel}${summary}`;
+  } else {
+    // Response complete but classified as needing specific input
+    title = `${convTitle}`;
+    const summary = payload.summary ? `\n${payload.summary.slice(0, 80)}` : '';
+    body = `${kindLabel}${summary}`;
   }
 
   const notification = new Notification({ title, body, silent: false });
@@ -48,6 +66,9 @@ function showNotification(payload) {
   notifications.unshift({
     type: payload.type,
     project: payload.project,
+    convTitle,
+    inputKind,
+    kindLabel,
     summary: payload.summary || '',
     timestamp: payload.timestamp || new Date().toISOString(),
     sessionId: payload.session_id,
