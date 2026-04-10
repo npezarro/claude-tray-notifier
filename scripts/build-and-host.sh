@@ -24,17 +24,26 @@ echo ""
 
 # 4. Upload to pezant.ca VM
 echo "Uploading to pezant.ca..."
-VM_USER="$VM_USER"
-VM_HOST="$VM_HOST"
-VM_KEY="$VM_KEY_PATH"
+
+# Require VM credentials from environment — never hardcode
+: "${VM_HOST:?ERROR: VM_HOST environment variable is not set}"
+: "${VM_USER:?ERROR: VM_USER environment variable is not set}"
+: "${VM_KEY_PATH:?ERROR: VM_KEY_PATH environment variable is not set}"
 REMOTE_DIR="/var/www/pezant-tools/public/downloads"
 
-# Try SSH key locations
+VM_KEY="$VM_KEY_PATH"
+
+# Try SSH key fallbacks only if the specified key doesn't exist
 if [ ! -f "$VM_KEY" ]; then
+  echo "WARNING: VM_KEY_PATH ($VM_KEY) not found, trying fallbacks..."
   VM_KEY="$HOME/.ssh/id_rsa"
 fi
 if [ ! -f "$VM_KEY" ]; then
   VM_KEY="$HOME/.ssh/id_ed25519"
+fi
+if [ ! -f "$VM_KEY" ]; then
+  echo "ERROR: No valid SSH key found"
+  exit 1
 fi
 
 ssh -i "$VM_KEY" "$VM_USER@$VM_HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null
