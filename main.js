@@ -8,7 +8,7 @@ const PORT = 9377;
 const MAX_NOTIFICATIONS = 20;
 const notifications = [];
 
-// Tray states: idle (grayscale), listening (chartreuse), unread (orange)
+// Tray states: idle (gray ghost), listening (green ghost), unread (amber ghost)
 const TRAY_STATE = { IDLE: 'idle', LISTENING: 'listening', UNREAD: 'unread' };
 let currentState = TRAY_STATE.IDLE;
 let hasUnread = false;
@@ -17,15 +17,15 @@ let tray = null;
 let dropdownWindow = null;
 let token;
 
-function pandaIcon(state) {
-  const name = `panda-${state}.png`;
+function trayIcon(state) {
+  const name = `ghost-${state}.png`;
   return nativeImage.createFromPath(path.join(__dirname, 'assets', name));
 }
 
 function setTrayState(state) {
   currentState = state;
   if (tray) {
-    tray.setImage(pandaIcon(state));
+    tray.setImage(trayIcon(state));
   }
 }
 
@@ -78,7 +78,7 @@ function showNotification(payload) {
     notifications.length = MAX_NOTIFICATIONS;
   }
 
-  // Switch to unread (orange) panda
+  // Switch to unread (amber ghost)
   hasUnread = true;
   setTrayState(TRAY_STATE.UNREAD);
 
@@ -161,8 +161,8 @@ app.whenReady().then(() => {
     return;
   }
 
-  // Create tray with grayscale panda (idle)
-  tray = new Tray(pandaIcon(TRAY_STATE.IDLE));
+  // Create tray with gray ghost (idle)
+  tray = new Tray(trayIcon(TRAY_STATE.IDLE));
   tray.setToolTip('Claude Code Notifier');
 
   // Left click toggles the dropdown window
@@ -207,7 +207,7 @@ app.whenReady().then(() => {
   };
   poller.start(2000);
 
-  // Switch to listening (chartreuse) after first successful connection
+  // Switch to listening (green ghost) after first successful connection
   setTrayState(TRAY_STATE.LISTENING);
 
   console.log('Claude Tray Notifier ready');
