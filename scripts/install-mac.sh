@@ -19,6 +19,23 @@ else
   echo "Token already exists at $TOKEN_DIR/token"
 fi
 
+# 1b. Set up auto-update URL
+UPDATE_URL_FILE="$TOKEN_DIR/update-url"
+if [ ! -f "$UPDATE_URL_FILE" ]; then
+  echo ""
+  echo "No auto-update URL configured."
+  echo "Enter the base URL where update artifacts are hosted (or press Enter to skip):"
+  read -r UPDATE_URL_INPUT
+  if [ -n "$UPDATE_URL_INPUT" ]; then
+    echo "$UPDATE_URL_INPUT" > "$UPDATE_URL_FILE"
+    echo "Update URL saved."
+  else
+    echo "Auto-update disabled (can configure later at $UPDATE_URL_FILE)"
+  fi
+else
+  echo "Update URL already configured at $UPDATE_URL_FILE"
+fi
+
 # 2. Install dependencies
 echo ""
 echo "Installing dependencies..."

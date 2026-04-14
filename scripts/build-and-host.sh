@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 # 1. Install deps
 npm install
 
-# 2. Build .dmg
-npx electron-builder --mac dmg
+# 2. Build .dmg + .zip (zip needed for auto-updater)
+npx electron-builder --mac dmg zip
 
 # 3. Find the output
 DMG=$(find dist -name '*.dmg' -type f | head -1)
@@ -49,8 +49,24 @@ fi
 ssh -i "$VM_KEY" "$VM_USER@$VM_HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null
 scp -i "$VM_KEY" "$DMG" "$VM_USER@$VM_HOST:$REMOTE_DIR/claude-tray-notifier.dmg"
 
+# Upload auto-update artifacts (electron-updater needs .zip + latest-mac.yml)
+ZIP=$(find dist -name '*.zip' -type f | head -1)
+YML="dist/latest-mac.yml"
+
+if [ -n "$ZIP" ] && [ -f "$ZIP" ]; then
+  echo "Uploading auto-update zip: $ZIP"
+  scp -i "$VM_KEY" "$ZIP" "$VM_USER@$VM_HOST:$REMOTE_DIR/"
+fi
+
+if [ -f "$YML" ]; then
+  echo "Uploading update manifest: $YML"
+  scp -i "$VM_KEY" "$YML" "$VM_USER@$VM_HOST:$REMOTE_DIR/latest-mac.yml"
+fi
+
 echo ""
 echo "=== Done ==="
-echo "Download URL: https://pezant.ca/tools/downloads/claude-tray-notifier.dmg"
+echo "Download URL: https://$VM_HOST/tools/downloads/claude-tray-notifier.dmg"
+echo "Auto-update:  https://$VM_HOST/tools/downloads/latest-mac.yml"
 echo ""
 echo "To install: open the .dmg and drag to Applications"
+echo "Existing installs will auto-update within 4 hours."

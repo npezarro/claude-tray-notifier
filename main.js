@@ -4,6 +4,7 @@ const { createServer } = require('./lib/server');
 const { loadToken } = require('./lib/auth');
 const { Poller } = require('./lib/poller');
 const { formatNotification, buildHistoryEntry, MAX_NOTIFICATIONS } = require('./lib/format');
+const { setupAutoUpdater, checkForUpdatesManual } = require('./lib/updater');
 
 const PORT = 9377;
 const notifications = [];
@@ -148,6 +149,7 @@ app.whenReady().then(() => {
         setTrayState(TRAY_STATE.LISTENING);
       }},
       { type: 'separator' },
+      { label: 'Check for Updates', click: () => checkForUpdatesManual() },
       { label: 'Quit', click: () => app.quit() }
     ]);
     tray.popUpContextMenu(contextMenu);
@@ -172,6 +174,9 @@ app.whenReady().then(() => {
 
   // Switch to listening (green ghost) after first successful connection
   setTrayState(TRAY_STATE.LISTENING);
+
+  // Auto-updater (checks on startup + every 4h)
+  setupAutoUpdater();
 
   console.log('Claude Tray Notifier ready');
   console.log(`Local server: 127.0.0.1:${PORT}`);
