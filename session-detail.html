@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1e1e1e;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+    .session-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #333;
+      background: #252525;
+    }
+    .session-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .status-dot.active { background: #4caf50; }
+    .status-dot.idle { background: #666; }
+    .session-meta {
+      font-size: 11px;
+      color: #888;
+      display: flex;
+      gap: 16px;
+    }
+    .session-id {
+      font-family: monospace;
+      font-size: 10px;
+      color: #555;
+      margin-top: 4px;
+    }
+    .timeline {
+      padding: 12px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .event {
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      border-left: 3px solid #333;
+      border-radius: 0 4px 4px 0;
+      background: #252525;
+    }
+    .event-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .event-time {
+      font-size: 11px;
+      color: #888;
+    }
+    .event-kind {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    .kind-done     { background: #1a2a1a; color: #7ab87a; border-left-color: #4caf50; }
+    .kind-choice   { background: #2a1a3a; color: #b49adb; border-left-color: #9c7ae0; }
+    .kind-question { background: #1a2a3a; color: #7aaed4; border-left-color: #5a9ed4; }
+    .kind-approval { background: #2a2a1a; color: #c4b44a; border-left-color: #c4b44a; }
+    .kind-error    { background: #3a1a1a; color: #d47a7a; border-left-color: #d47a7a; }
+    .kind-attention { background: #3a2a1a; color: #c4944a; border-left-color: #c4944a; }
+    .kind-general  { background: #252525; color: #888; border-left-color: #555; }
+    .event-summary {
+      font-size: 12px;
+      color: #bbb;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .empty {
+      padding: 60px 20px;
+      text-align: center;
+      color: #666;
+    }
+    html, body {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+<body>
+  <div class="session-header">
+    <h2>
+      <span class="status-dot" id="status-dot"></span>
+      <span id="header-title">Loading...</span>
+    </h2>
+    <div class="session-meta">
+      <span id="meta-status"></span>
+      <span id="meta-started"></span>
+      <span id="meta-cwd"></span>
+    </div>
+    <div class="session-id" id="session-id"></div>
+  </div>
+  <div class="timeline" id="timeline">
+    <div class="empty">Loading events...</div>
+  </div>
+  <script src="session-renderer.js"></script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 const list = document.getElementById('list');
+const sessionsList = document.getElementById('sessions-list');
 
 const KIND_STYLES = {
   choice:   { cls: 'type-choice',   icon: '◆' },
@@ -10,6 +11,38 @@ const KIND_STYLES = {
   general:  { cls: 'type-done',     icon: '—' }
 };
 
+// --- Tab switching ---
+const tabs = document.querySelectorAll('.tab');
+const panels = document.querySelectorAll('.panel');
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    tabs.forEach(t => t.classList.remove('active'));
+    panels.forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    document.getElementById(`${target}-panel`).classList.add('active');
+
+    if (target === 'sessions') {
+      loadSessions();
+    }
+  });
+});
+
+// --- Connection status ---
+window.api.onConnectionStatus(({ connected, lastPoll }) => {
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  if (connected) {
+    dot.className = 'connection-dot connected';
+    label.textContent = 'Connected';
+  } else {
+    dot.className = 'connection-dot disconnected';
+    label.textContent = 'Disconnected';
+  }
+});
+
+// --- Notifications ---
 function formatTime(iso) {
   try {
     const d = new Date(iso);
@@ -52,14 +85,73 @@ function render(notifications) {
   }).join('');
 }
 
+window.api.onNotificationsUpdated(render);
+
+// --- Sessions ---
+let sessionsCache = [];
+
+function relativeTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function renderSessions(sessions) {
+  sessionsCache = sessions;
+
+  if (!sessions || sessions.length === 0) {
+    sessionsList.innerHTML = '<div class="empty">No sessions yet</div>';
+    return;
+  }
+
+  sessionsList.innerHTML = sessions.map(s => {
+    const count = s.notifications ? s.notifications.length : 0;
+    return `
+      <div class="session-item" data-session-id="${escapeHtml(s.sessionId)}">
+        <div class="session-top">
+          <span class="session-status ${s.status}"></span>
+          <span class="session-project">${escapeHtml(s.project)}</span>
+          <span class="session-time">${relativeTime(s.lastActivity)}</span>
+        </div>
+        <div class="session-conv-title">${escapeHtml(s.convTitle)}</div>
+        <div class="session-count">${count} event${count !== 1 ? 's' : ''}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+sessionsList.addEventListener('click', (e) => {
+  const item = e.target.closest('.session-item');
+  if (!item) return;
+  const id = item.dataset.sessionId;
+  const session = sessionsCache.find(s => s.sessionId === id);
+  if (session) {
+    window.api.openSessionDetail(session);
+  }
+});
+
+async function loadSessions() {
+  try {
+    const sessions = await window.api.getSessions();
+    renderSessions(sessions);
+  } catch (err) {
+    sessionsList.innerHTML = `<div class="empty">Error loading sessions</div>`;
+  }
+}
+
+// --- Utils ---
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
 
-window.api.onNotificationsUpdated(render);
-
+// --- Footer ---
 document.getElementById('clear').addEventListener('click', () => {
   window.api.clearNotifications();
   render([]);

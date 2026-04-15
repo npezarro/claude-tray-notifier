@@ -31,8 +31,11 @@
     "files": [
       "main.js",
       "preload.js",
+      "preload-session.js",
       "renderer.js",
+      "session-renderer.js",
       "index.html",
+      "session-detail.html",
       "lib/**",
       "assets/**"
     ],
