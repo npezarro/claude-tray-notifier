@@ -266,7 +266,7 @@ app.whenReady().then(() => {
 
   console.log('Claude Tray Notifier ready');
   console.log(`Local server: 127.0.0.1:${PORT}`);
-  console.log('Polling: https://pezant.ca/tools/notify/poll every 2s');
+  console.log('Polling: https://pezant.ca/api/notify/poll every 2s');
 });
 
 // IPC handlers
