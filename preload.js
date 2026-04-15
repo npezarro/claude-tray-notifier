@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   getSessions: () => ipcRenderer.invoke('get-sessions'),
   getSession: (id) => ipcRenderer.invoke('get-session', id),
-  openSessionDetail: (session) => ipcRenderer.send('open-session-detail', JSON.parse(JSON.stringify(session))),
+  openSessionDetail: (sessionId) => ipcRenderer.send('open-session-detail', sessionId),
   quit: () => {
     ipcRenderer.send('quit');
   }

@@ -287,8 +287,9 @@ ipcMain.handle('get-session', (_event, sessionId) => {
   return sessionRegistry.getSession(sessionId);
 });
 
-ipcMain.on('open-session-detail', (_event, sessionData) => {
-  openSessionDetail(sessionData);
+ipcMain.on('open-session-detail', (_event, sessionId) => {
+  const sessionData = sessionRegistry.getSession(sessionId);
+  if (sessionData) openSessionDetail(sessionData);
 });
 
 ipcMain.on('quit', () => {

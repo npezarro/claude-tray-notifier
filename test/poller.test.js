@@ -233,25 +233,48 @@ describe('Poller', () => {
       restoreMock();
     });
 
-    it('calls onDisconnected on non-200 response', async () => {
-      installMock({ statusCode: 500 });
+    it('calls onDisconnected on non-200 after being connected', async () => {
+      // First connect successfully
+      installMock({});
       let disconnected = false;
       const p = new Poller('https://example.com', 'tok', () => {});
       p.onDisconnected = () => { disconnected = true; };
+      p.poll();
+      await new Promise((r) => setTimeout(r, 20));
+      restoreMock();
+      // Now fail — should fire onDisconnected
+      installMock({ statusCode: 500 });
       p.poll();
       await new Promise((r) => setTimeout(r, 20));
       assert.strictEqual(disconnected, true);
       restoreMock();
     });
 
-    it('calls onDisconnected on request error', async () => {
-      installMock({ error: new Error('ECONNREFUSED') });
+    it('calls onDisconnected on request error after being connected', async () => {
+      // First connect successfully
+      installMock({});
       let disconnected = false;
       const p = new Poller('https://example.com', 'tok', () => {});
       p.onDisconnected = () => { disconnected = true; };
       p.poll();
       await new Promise((r) => setTimeout(r, 20));
+      restoreMock();
+      // Now error — should fire onDisconnected
+      installMock({ error: new Error('ECONNREFUSED') });
+      p.poll();
+      await new Promise((r) => setTimeout(r, 20));
       assert.strictEqual(disconnected, true);
+      restoreMock();
+    });
+
+    it('does not call onDisconnected when never connected', async () => {
+      installMock({ statusCode: 500 });
+      let disconnected = false;
+      const p = new Poller('https://example.com', 'tok', () => {});
+      p.onDisconnected = () => { disconnected = true; };
+      p.poll();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.strictEqual(disconnected, false);
       restoreMock();
     });
 

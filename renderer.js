@@ -88,8 +88,6 @@ function render(notifications) {
 window.api.onNotificationsUpdated(render);
 
 // --- Sessions ---
-let sessionsCache = [];
-
 function relativeTime(iso) {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
@@ -102,8 +100,6 @@ function relativeTime(iso) {
 }
 
 function renderSessions(sessions) {
-  sessionsCache = sessions;
-
   if (!sessions || sessions.length === 0) {
     sessionsList.innerHTML = '<div class="empty">No sessions yet</div>';
     return;
@@ -128,11 +124,7 @@ function renderSessions(sessions) {
 sessionsList.addEventListener('click', (e) => {
   const item = e.target.closest('.session-item');
   if (!item) return;
-  const id = item.dataset.sessionId;
-  const session = sessionsCache.find(s => s.sessionId === id);
-  if (session) {
-    window.api.openSessionDetail(session);
-  }
+  window.api.openSessionDetail(item.dataset.sessionId);
 });
 
 async function loadSessions() {
@@ -147,7 +139,7 @@ async function loadSessions() {
 // --- Utils ---
 function escapeHtml(str) {
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = str || '';
   return div.innerHTML;
 }
 
