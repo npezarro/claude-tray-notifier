@@ -1,6 +1,6 @@
 {
   "name": "claude-tray-notifier",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "macOS menu bar notifier for Claude Code CLI",
   "main": "main.js",
   "scripts": {

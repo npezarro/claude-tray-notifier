@@ -44,6 +44,17 @@ function showNotification(payload) {
   const { title, body } = formatNotification(payload);
 
   const notification = new Notification({ title, body, silent: false });
+
+  // Track in session registry (before show, so click handler can reference it)
+  const session = sessionRegistry.addNotification(payload);
+
+  // Click notification -> open session detail window
+  if (session) {
+    notification.on('click', () => {
+      openSessionDetail(session);
+    });
+  }
+
   notification.show();
 
   // Store in history
@@ -51,9 +62,6 @@ function showNotification(payload) {
   if (notifications.length > MAX_NOTIFICATIONS) {
     notifications.length = MAX_NOTIFICATIONS;
   }
-
-  // Track in session registry
-  const session = sessionRegistry.addNotification(payload);
 
   // Switch to unread (amber ghost)
   hasUnread = true;
