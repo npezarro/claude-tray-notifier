@@ -10,6 +10,7 @@ const sessionRegistry = require('./lib/sessions');
 const PORT = 9377;
 const notifications = [];
 const sessionDetailWindows = new Map(); // sessionId -> BrowserWindow
+const activeNotifications = new Set(); // prevent GC of native notifications before click
 const MAX_DETAIL_WINDOWS = 5;
 
 // Tray states: idle (gray ghost), listening (green ghost), unread (amber ghost)
@@ -48,12 +49,17 @@ function showNotification(payload) {
   // Track in session registry (before show, so click handler can reference it)
   const session = sessionRegistry.addNotification(payload);
 
+  // Keep reference alive so macOS click handler isn't GC'd
+  activeNotifications.add(notification);
+
   // Click notification -> open session detail window
-  if (session) {
-    notification.on('click', () => {
-      openSessionDetail(session);
-    });
-  }
+  notification.on('click', () => {
+    if (session) openSessionDetail(session);
+    activeNotifications.delete(notification);
+  });
+  notification.on('close', () => {
+    activeNotifications.delete(notification);
+  });
 
   notification.show();
 
