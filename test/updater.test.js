@@ -64,8 +64,10 @@ describe('updater', () => {
   let configDir;
   let configPath;
   let originalHomedir;
+  let timers; // track timers returned by setupAutoUpdater for cleanup
 
   beforeEach(() => {
+    timers = null;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-test-'));
     configDir = path.join(tmpDir, '.config', 'claude-tray');
     fs.mkdirSync(configDir, { recursive: true });
@@ -84,19 +86,31 @@ describe('updater', () => {
   });
 
   afterEach(() => {
+    if (timers) {
+      clearTimeout(timers.startupTimer);
+      clearInterval(timers.periodicTimer);
+    }
     os.homedir = originalHomedir;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   describe('setupAutoUpdater', () => {
     it('returns early when no update URL configured', () => {
-      setupAutoUpdater();
+      const result = setupAutoUpdater();
       assert.strictEqual(mockAutoUpdater._setFeedCalls.length, 0);
+      assert.strictEqual(result, undefined);
+    });
+
+    it('returns timer handles for cleanup', () => {
+      fs.writeFileSync(configPath, 'https://updates.example.com');
+      timers = setupAutoUpdater();
+      assert.ok(timers.startupTimer);
+      assert.ok(timers.periodicTimer);
     });
 
     it('configures feed URL from config file', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com/releases\n');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.strictEqual(mockAutoUpdater._setFeedCalls.length, 1);
       assert.deepStrictEqual(mockAutoUpdater._setFeedCalls[0][0], {
         provider: 'generic',
@@ -106,32 +120,32 @@ describe('updater', () => {
 
     it('enables autoDownload and autoInstallOnAppQuit', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.strictEqual(mockAutoUpdater.autoDownload, true);
       assert.strictEqual(mockAutoUpdater.autoInstallOnAppQuit, true);
     });
 
     it('registers update-available handler', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.ok(mockAutoUpdater._handlers['update-available']);
     });
 
     it('registers update-downloaded handler', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.ok(mockAutoUpdater._handlers['update-downloaded']);
     });
 
     it('registers error handler', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.ok(mockAutoUpdater._handlers['error']);
     });
 
     it('trims whitespace from config URL', () => {
       fs.writeFileSync(configPath, '  https://updates.example.com  \n');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.strictEqual(mockAutoUpdater._setFeedCalls[0][0].url, 'https://updates.example.com');
     });
   });
@@ -172,7 +186,7 @@ describe('updater', () => {
   describe('event handlers', () => {
     it('update-available shows download notification', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       mockAutoUpdater._handlers['update-available']({ version: '2.0.0' });
       const notif = mockNotifications.find(n => n.opts.title === 'Update Available');
       assert.ok(notif);
@@ -182,7 +196,7 @@ describe('updater', () => {
 
     it('update-downloaded shows ready notification', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       mockAutoUpdater._handlers['update-downloaded']({ version: '2.0.0' });
       const notif = mockNotifications.find(n => n.opts.title === 'Update Ready');
       assert.ok(notif);
@@ -191,7 +205,7 @@ describe('updater', () => {
 
     it('clicking update-downloaded notification calls quitAndInstall', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       mockAutoUpdater._handlers['update-downloaded']({ version: '2.0.0' });
       const notif = mockNotifications.find(n => n.opts.title === 'Update Ready');
       notif._handlers.click();
@@ -200,7 +214,7 @@ describe('updater', () => {
 
     it('error handler does not throw', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      setupAutoUpdater();
+      timers = setupAutoUpdater();
       assert.doesNotThrow(() => {
         mockAutoUpdater._handlers['error'](new Error('update failed'));
       });
