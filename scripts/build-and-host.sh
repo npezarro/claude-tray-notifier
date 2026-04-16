@@ -65,8 +65,8 @@ fi
 
 echo ""
 echo "=== Done ==="
-echo "Download URL: https://$VM_HOST/tools/downloads/claude-tray-notifier.dmg"
-echo "Auto-update:  https://$VM_HOST/tools/downloads/latest-mac.yml"
+echo "Download URL: https://$VM_HOST/downloads/claude-tray-notifier.dmg"
+echo "Auto-update:  https://$VM_HOST/downloads/latest-mac.yml"
 echo ""
 echo "To install: open the .dmg and drag to Applications"
 echo "Existing installs will auto-update within 4 hours."
