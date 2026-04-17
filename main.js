@@ -14,6 +14,7 @@ const notifications = [];
 const sessionDetailWindows = new Map(); // sessionId -> BrowserWindow
 const activeNotifications = new Set(); // prevent GC of native notifications before click
 const MAX_DETAIL_WINDOWS = 5;
+let lastNotificationSessionId = null; // track which session the latest notification belongs to
 
 // Tray states: idle (gray ghost), listening (green ghost), unread (amber ghost)
 const TRAY_STATE = { IDLE: 'idle', LISTENING: 'listening', UNREAD: 'unread' };
@@ -52,12 +53,19 @@ function showNotification(payload) {
   // Track in session registry (before show, so click handler can reference it)
   const session = sessionRegistry.addNotification(payload);
 
+  // Track latest notification's session for app activate handler
+  if (session) lastNotificationSessionId = session.sessionId;
+
   // Keep reference alive so macOS click handler isn't GC'd
   activeNotifications.add(notification);
 
   // Click notification -> open session detail window
+  const notifSessionId = session ? session.sessionId : null;
   notification.on('click', () => {
-    if (session) openSessionDetail(session);
+    if (notifSessionId) {
+      const freshSession = sessionRegistry.getSession(notifSessionId);
+      if (freshSession) openSessionDetail(freshSession);
+    }
     activeNotifications.delete(notification);
   });
   notification.on('close', () => {
@@ -386,4 +394,13 @@ ipcMain.on('quit', () => {
 
 app.on('window-all-closed', (e) => {
   e.preventDefault();
+});
+
+// When app is activated (e.g. clicking a notification), open the last notified session
+app.on('activate', () => {
+  if (lastNotificationSessionId) {
+    const session = sessionRegistry.getSession(lastNotificationSessionId);
+    if (session) openSessionDetail(session);
+    lastNotificationSessionId = null;
+  }
 });
