@@ -69,8 +69,9 @@ function render(notifications) {
       ? `<div class="summary">${escapeHtml(n.summary.slice(0, 120))}</div>`
       : '';
 
+    const sessionAttr = n.sessionId ? ` data-session-id="${escapeHtml(n.sessionId)}"` : '';
     return `
-      <div class="notification${unreadCls}">
+      <div class="notification${unreadCls}"${sessionAttr} style="cursor:pointer">
         <div class="top">
           <span class="conv-title">${title}</span>
           <span class="time">${formatTime(n.timestamp)}</span>
@@ -86,6 +87,13 @@ function render(notifications) {
 }
 
 window.api.onNotificationsUpdated(render);
+
+// Click a notification to open its session detail
+list.addEventListener('click', (e) => {
+  const item = e.target.closest('.notification[data-session-id]');
+  if (!item) return;
+  window.api.openSessionDetail(item.dataset.sessionId);
+});
 
 // --- Sessions ---
 function relativeTime(iso) {
