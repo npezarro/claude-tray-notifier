@@ -199,9 +199,16 @@ function openSessionDetail(sessionData) {
 
   win.on('closed', () => {
     sessionDetailWindows.delete(id);
+    // Hide dock icon when all detail windows are closed
+    if (sessionDetailWindows.size === 0 && app.dock) {
+      app.dock.hide();
+    }
   });
 
   sessionDetailWindows.set(id, win);
+
+  // Show dock icon when a detail window is open
+  if (app.dock) app.dock.show();
 }
 
 function loadRelayUrl() {
