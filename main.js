@@ -1,4 +1,6 @@
-const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage } = require('electron');
+const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage, dialog } = require('electron');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createServer } = require('./lib/server');
 const { loadToken } = require('./lib/auth');
@@ -22,6 +24,7 @@ let isConnected = false;
 let tray = null;
 let dropdownWindow = null;
 let token;
+let activePoller = null;
 
 function trayIcon(state) {
   const name = `ghost-${state}.png`;
@@ -201,18 +204,93 @@ function openSessionDetail(sessionData) {
   sessionDetailWindows.set(id, win);
 }
 
+function loadRelayUrl() {
+  const configPath = path.join(os.homedir(), '.config', 'claude-tray', 'relay-url');
+  try {
+    return fs.readFileSync(configPath, 'utf8').trim();
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveToken(newToken) {
+  const configDir = path.join(os.homedir(), '.config', 'claude-tray');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'token'), newToken.trim());
+}
+
+function startPoller(pollerToken) {
+  if (activePoller) activePoller.stop();
+
+  const relayUrl = loadRelayUrl();
+  if (!relayUrl) {
+    console.error('No relay URL configured at ~/.config/claude-tray/relay-url');
+    return;
+  }
+
+  activePoller = new Poller(relayUrl, pollerToken, (payload) => {
+    showNotification(payload);
+  });
+  activePoller.onConnected = () => {
+    isConnected = true;
+    pushConnectionStatus();
+    if (!hasUnread) setTrayState(TRAY_STATE.LISTENING);
+  };
+  activePoller.onDisconnected = () => {
+    isConnected = false;
+    pushConnectionStatus();
+  };
+  activePoller.start(2000);
+}
+
+function promptForToken() {
+  // Use a tiny BrowserWindow with an input field since Electron has no native prompt
+  const win = new BrowserWindow({
+    width: 420,
+    height: 160,
+    title: 'Set Auth Token',
+    resizable: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false }
+  });
+
+  const html = `
+    <html><body style="font-family:-apple-system,sans-serif;background:#1e1e1e;color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:12px">
+      <label style="font-size:13px">Paste your auth token:</label>
+      <input id="t" style="width:100%;padding:8px;border:1px solid #555;border-radius:4px;background:#2a2a2a;color:#e0e0e0;font-family:monospace;font-size:12px" autofocus>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="require('electron').ipcRenderer.send('token-cancel')" style="padding:6px 16px;border:1px solid #555;border-radius:4px;background:#333;color:#e0e0e0;cursor:pointer">Cancel</button>
+        <button onclick="require('electron').ipcRenderer.send('token-submit',document.getElementById('t').value)" style="padding:6px 16px;border:none;border-radius:4px;background:#4a9eff;color:#fff;cursor:pointer">Save</button>
+      </div>
+      <script>document.getElementById('t').addEventListener('keydown',e=>{if(e.key==='Enter')require('electron').ipcRenderer.send('token-submit',document.getElementById('t').value)})</script>
+    </body></html>`;
+
+  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+  const onSubmit = (_e, val) => {
+    if (val && val.trim()) {
+      token = val.trim();
+      saveToken(token);
+      startPoller(token);
+    }
+    win.close();
+    cleanup();
+  };
+  const onCancel = () => { win.close(); cleanup(); };
+  const cleanup = () => {
+    ipcMain.removeListener('token-submit', onSubmit);
+    ipcMain.removeListener('token-cancel', onCancel);
+  };
+
+  ipcMain.once('token-submit', onSubmit);
+  ipcMain.once('token-cancel', onCancel);
+}
+
 app.whenReady().then(() => {
   // Hide dock icon on macOS
   if (app.dock) app.dock.hide();
 
-  // Load auth token
+  // Load auth token (app still starts without one — user can set via menu)
   token = loadToken();
-  if (!token) {
-    console.error('No token found. Run scripts/generate-token.sh first.');
-    console.error('Expected at ~/.config/claude-tray/token');
-    app.quit();
-    return;
-  }
 
   // Create tray with gray ghost (idle)
   tray = new Tray(trayIcon(TRAY_STATE.IDLE));
@@ -240,6 +318,7 @@ app.whenReady().then(() => {
         setTrayState(TRAY_STATE.LISTENING);
       }},
       { type: 'separator' },
+      { label: 'Set Auth Token...', click: () => promptForToken() },
       { label: 'Check for Updates', click: () => checkForUpdatesManual() },
       { label: 'Quit', click: () => app.quit() }
     ]);
@@ -250,27 +329,15 @@ app.whenReady().then(() => {
   createWindow();
 
   // Start local HTTP server (for direct testing)
-  createServer(PORT, token, (payload) => {
-    showNotification(payload);
-  });
-
-  // Start polling relay server
-  const poller = new Poller('https://pezant.ca', token, (payload) => {
-    showNotification(payload);
-  });
-  poller.onConnected = () => {
-    isConnected = true;
-    pushConnectionStatus();
-    if (!hasUnread) setTrayState(TRAY_STATE.LISTENING);
-  };
-  poller.onDisconnected = () => {
-    isConnected = false;
-    pushConnectionStatus();
-  };
-  poller.start(2000);
-
-  // Switch to listening (green ghost) after first successful connection
-  setTrayState(TRAY_STATE.LISTENING);
+  if (token) {
+    createServer(PORT, token, (payload) => {
+      showNotification(payload);
+    });
+    startPoller(token);
+  } else {
+    console.log('No token configured — use Set Auth Token in the menu');
+    promptForToken();
+  }
 
   // Auto-updater (checks on startup + every 4h)
   setupAutoUpdater();
@@ -280,7 +347,7 @@ app.whenReady().then(() => {
 
   console.log('Claude Tray Notifier ready');
   console.log(`Local server: 127.0.0.1:${PORT}`);
-  console.log('Polling: https://pezant.ca/api/notify/poll every 2s');
+  console.log('Polling relay server every 2s');
 });
 
 // IPC handlers
