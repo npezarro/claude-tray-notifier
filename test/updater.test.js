@@ -12,6 +12,7 @@ const mockAutoUpdater = {
   checkForUpdatesAndNotify() { return mockAutoUpdater._notifyResult; },
   quitAndInstall() { mockAutoUpdater._quitCalled = true; },
   on(event, handler) { mockAutoUpdater._handlers[event] = handler; },
+  once(event, handler) { mockAutoUpdater._handlers[event] = handler; },
   autoDownload: false,
   autoInstallOnAppQuit: false,
   _setFeedCalls: [],
@@ -171,12 +172,11 @@ describe('updater', () => {
 
     it('shows error notification on check failure', async () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
-      mockAutoUpdater._notifyResult = Promise.reject(new Error('Network timeout'));
-      const orig = mockAutoUpdater.checkForUpdatesAndNotify;
-      mockAutoUpdater.checkForUpdatesAndNotify = () => mockAutoUpdater._notifyResult;
+      const orig = mockAutoUpdater.checkForUpdates;
+      mockAutoUpdater.checkForUpdates = () => Promise.reject(new Error('Network timeout'));
       checkForUpdatesManual();
       await new Promise((r) => setTimeout(r, 50));
-      mockAutoUpdater.checkForUpdatesAndNotify = orig;
+      mockAutoUpdater.checkForUpdates = orig;
       const errorNotif = mockNotifications.find(n => n.opts.title === 'Update Check Failed');
       assert.ok(errorNotif);
       assert.strictEqual(errorNotif.opts.body, 'Network timeout');
