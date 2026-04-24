@@ -21,17 +21,18 @@ const mockAutoUpdater = {
   _notifyResult: Promise.resolve()
 };
 
-const mockNotifications = [];
-class MockNotification {
-  constructor(opts) {
-    this.opts = opts;
-    this._handlers = {};
-    this.shown = false;
-    mockNotifications.push(this);
+const mockDialogCalls = [];
+const mockDialog = {
+  showMessageBox(opts) {
+    mockDialogCalls.push(opts);
+    return Promise.resolve({ response: 0 });
   }
-  show() { this.shown = true; }
-  on(event, handler) { this._handlers[event] = handler; }
-}
+};
+
+const mockApp = {
+  getPath() { return '/Applications/claude-tray.app/Contents/MacOS/claude-tray'; },
+  exit() {}
+};
 
 // Intercept require for electron modules
 const origResolve = Module._resolveFilename;
@@ -52,7 +53,7 @@ require.cache['electron'] = {
   id: 'electron',
   filename: 'electron',
   loaded: true,
-  exports: { Notification: MockNotification }
+  exports: { dialog: mockDialog, app: mockApp }
 };
 
 const { setupAutoUpdater, checkForUpdatesManual } = require('../lib/updater');
@@ -83,7 +84,7 @@ describe('updater', () => {
     mockAutoUpdater._notifyResult = Promise.resolve();
     mockAutoUpdater.autoDownload = false;
     mockAutoUpdater.autoInstallOnAppQuit = false;
-    mockNotifications.length = 0;
+    mockDialogCalls.length = 0;
   });
 
   afterEach(() => {
@@ -119,11 +120,11 @@ describe('updater', () => {
       });
     });
 
-    it('enables autoDownload and autoInstallOnAppQuit', () => {
+    it('enables autoDownload but not autoInstallOnAppQuit (custom shell installer)', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
       timers = setupAutoUpdater();
       assert.strictEqual(mockAutoUpdater.autoDownload, true);
-      assert.strictEqual(mockAutoUpdater.autoInstallOnAppQuit, true);
+      assert.strictEqual(mockAutoUpdater.autoInstallOnAppQuit, false);
     });
 
     it('registers update-available handler', () => {
@@ -152,11 +153,11 @@ describe('updater', () => {
   });
 
   describe('checkForUpdatesManual', () => {
-    it('shows notification when no URL configured', () => {
+    it('shows dialog when no URL configured', () => {
       checkForUpdatesManual();
-      assert.strictEqual(mockNotifications.length, 1);
-      assert.strictEqual(mockNotifications[0].opts.title, 'Auto-Update Not Configured');
-      assert.ok(mockNotifications[0].shown);
+      assert.strictEqual(mockDialogCalls.length, 1);
+      assert.strictEqual(mockDialogCalls[0].title, 'Auto-Update');
+      assert.strictEqual(mockDialogCalls[0].type, 'warning');
     });
 
     it('does not call setFeedURL when no URL configured', () => {
@@ -170,46 +171,36 @@ describe('updater', () => {
       assert.strictEqual(mockAutoUpdater._setFeedCalls.length, 1);
     });
 
-    it('shows error notification on check failure', async () => {
+    it('shows error dialog on check failure', async () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
       const orig = mockAutoUpdater.checkForUpdates;
       mockAutoUpdater.checkForUpdates = () => Promise.reject(new Error('Network timeout'));
       checkForUpdatesManual();
       await new Promise((r) => setTimeout(r, 50));
       mockAutoUpdater.checkForUpdates = orig;
-      const errorNotif = mockNotifications.find(n => n.opts.title === 'Update Check Failed');
-      assert.ok(errorNotif);
-      assert.strictEqual(errorNotif.opts.body, 'Network timeout');
+      const errorDialog = mockDialogCalls.find(d => d.title === 'Update Check Failed');
+      assert.ok(errorDialog);
+      assert.strictEqual(errorDialog.message, 'Network timeout');
     });
   });
 
   describe('event handlers', () => {
-    it('update-available shows download notification', () => {
+    it('update-available only logs, no dialog', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
       timers = setupAutoUpdater();
       mockAutoUpdater._handlers['update-available']({ version: '2.0.0' });
-      const notif = mockNotifications.find(n => n.opts.title === 'Update Available');
-      assert.ok(notif);
-      assert.ok(notif.opts.body.includes('2.0.0'));
-      assert.ok(notif.shown);
+      // update-available only logs to console, no dialog shown
+      assert.strictEqual(mockDialogCalls.length, 0);
     });
 
-    it('update-downloaded shows ready notification', () => {
+    it('update-downloaded shows dialog with Restart/Later buttons', () => {
       fs.writeFileSync(configPath, 'https://updates.example.com');
       timers = setupAutoUpdater();
       mockAutoUpdater._handlers['update-downloaded']({ version: '2.0.0' });
-      const notif = mockNotifications.find(n => n.opts.title === 'Update Ready');
-      assert.ok(notif);
-      assert.ok(notif.opts.body.includes('2.0.0'));
-    });
-
-    it('clicking update-downloaded notification calls quitAndInstall', () => {
-      fs.writeFileSync(configPath, 'https://updates.example.com');
-      timers = setupAutoUpdater();
-      mockAutoUpdater._handlers['update-downloaded']({ version: '2.0.0' });
-      const notif = mockNotifications.find(n => n.opts.title === 'Update Ready');
-      notif._handlers.click();
-      assert.strictEqual(mockAutoUpdater._quitCalled, true);
+      const dlg = mockDialogCalls.find(d => d.title === 'Update Ready');
+      assert.ok(dlg);
+      assert.ok(dlg.message.includes('2.0.0'));
+      assert.deepStrictEqual(dlg.buttons, ['Restart Now', 'Later']);
     });
 
     it('error handler does not throw', () => {
