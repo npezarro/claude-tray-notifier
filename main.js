@@ -1,4 +1,4 @@
-const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage, dialog } = require('electron');
+const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -18,7 +18,6 @@ let lastNotificationSessionId = null; // track which session the latest notifica
 
 // Tray states: idle (gray ghost), listening (green ghost), unread (amber ghost)
 const TRAY_STATE = { IDLE: 'idle', LISTENING: 'listening', UNREAD: 'unread' };
-let currentState = TRAY_STATE.IDLE;
 let hasUnread = false;
 let isConnected = false;
 
@@ -33,7 +32,6 @@ function trayIcon(state) {
 }
 
 function setTrayState(state) {
-  currentState = state;
   if (tray) {
     tray.setImage(trayIcon(state));
   }
