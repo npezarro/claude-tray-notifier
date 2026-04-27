@@ -30,7 +30,7 @@ tabs.forEach(tab => {
 });
 
 // --- Connection status ---
-window.api.onConnectionStatus(({ connected, lastPoll }) => {
+window.api.onConnectionStatus(({ connected }) => {
   const dot = document.getElementById('conn-dot');
   const label = document.getElementById('conn-label');
   if (connected) {
@@ -139,7 +139,7 @@ async function loadSessions() {
   try {
     const sessions = await window.api.getSessions();
     renderSessions(sessions);
-  } catch (err) {
+  } catch (_err) {
     sessionsList.innerHTML = `<div class="empty">Error loading sessions</div>`;
   }
 }
