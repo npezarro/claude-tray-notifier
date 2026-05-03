@@ -5,7 +5,7 @@ set -uo pipefail
 
 EVENT_TYPE="${1:-stop}"
 TOKEN_PATH="$HOME/repos/privateContext/claude-tray-token"
-NOTIFY_URL="https://pezant.ca/api/notify"
+NOTIFY_URL="${CLAUDE_TRAY_NOTIFY_URL:-https://pezant.ca/api/notify}"
 TITLE_CACHE_DIR="$HOME/.cache/claude-tray-titles"
 
 # Read token — exit silently if missing
