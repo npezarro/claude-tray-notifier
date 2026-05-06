@@ -22,15 +22,14 @@ echo ""
 echo "Built: $DMG"
 echo ""
 
-# 4. Upload to pezant.ca VM
-echo "Uploading to pezant.ca..."
-
+# 4. Upload to VM
 # Require VM credentials from environment — never hardcode
 : "${VM_HOST:?ERROR: VM_HOST environment variable is not set}"
 : "${VM_USER:?ERROR: VM_USER environment variable is not set}"
 : "${VM_KEY_PATH:?ERROR: VM_KEY_PATH environment variable is not set}"
 : "${REMOTE_DIR:?ERROR: REMOTE_DIR environment variable is not set}"
 
+echo "Uploading to $VM_HOST..."
 VM_KEY="$VM_KEY_PATH"
 
 # Try SSH key fallbacks only if the specified key doesn't exist

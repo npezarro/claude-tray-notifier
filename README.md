@@ -28,7 +28,7 @@ Clicking the tray icon opens a dropdown showing notification history. Right-clic
 ./scripts/generate-token.sh
 ```
 
-This creates a shared secret at `~/repos/privateContext/claude-tray-token` and symlinks it to `~/.config/claude-tray/token`.
+This creates a shared secret at `~/.config/claude-tray/token`. Override with `CLAUDE_TRAY_TOKEN_PATH` env var.
 
 ### 2. Install the app
 
