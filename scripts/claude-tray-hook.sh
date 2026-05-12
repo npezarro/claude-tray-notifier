@@ -4,6 +4,10 @@
 set -uo pipefail
 
 EVENT_TYPE="${1:-stop}"
+
+# Source ~/.env for env vars if not already in environment
+[ -z "${CLAUDE_TRAY_NOTIFY_URL:-}" ] && [ -f "$HOME/.env" ] && source "$HOME/.env" 2>/dev/null
+
 TOKEN_PATH="${CLAUDE_TRAY_TOKEN_PATH:-$HOME/.config/claude-tray/token}"
 NOTIFY_URL="${CLAUDE_TRAY_NOTIFY_URL:-}"
 [ -z "$NOTIFY_URL" ] && exit 0
