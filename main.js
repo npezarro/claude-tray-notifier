@@ -37,9 +37,11 @@ function setTrayState(state) {
   }
 }
 
+let authExpired = false;
+
 function pushConnectionStatus() {
   if (dropdownWindow && !dropdownWindow.isDestroyed()) {
-    dropdownWindow.webContents.send('connection-status', { connected: isConnected });
+    dropdownWindow.webContents.send('connection-status', { connected: isConnected, authExpired });
   }
 }
 
@@ -226,6 +228,52 @@ function loadRelayUrl() {
   }
 }
 
+function syncTokenFromServer() {
+  const relayUrl = loadRelayUrl();
+  if (!relayUrl) {
+    const { Notification: NativeNotif } = require('electron');
+    new NativeNotif({ title: 'Token Sync Failed', body: 'No relay URL configured' }).show();
+    return;
+  }
+
+  const baseUrl = relayUrl.replace(/\/$/, '');
+  const tokenUrl = `${baseUrl}/tools/claude-tray-token`;
+
+  const syncWin = new BrowserWindow({
+    width: 500,
+    height: 600,
+    title: 'Sync Auth Token',
+    webPreferences: { contextIsolation: true, nodeIntegration: false }
+  });
+
+  if (app.dock) app.dock.show();
+
+  syncWin.loadURL(tokenUrl);
+
+  syncWin.webContents.on('did-finish-load', async () => {
+    try {
+      const pageText = await syncWin.webContents.executeJavaScript(
+        'document.body.innerText.trim()'
+      );
+      if (pageText && pageText.length >= 32 && pageText.length <= 128 && /^[a-f0-9]+$/.test(pageText)) {
+        token = pageText;
+        saveToken(token);
+        if (activePoller) activePoller.updateToken(token);
+        authExpired = false;
+        pushConnectionStatus();
+        syncWin.close();
+        new Notification({ title: 'Token Synced', body: 'Connection restored', silent: false }).show();
+      }
+    } catch (_) {
+      // Page hasn't loaded the token yet (e.g. OIDC redirect in progress)
+    }
+  });
+
+  syncWin.on('closed', () => {
+    if (sessionDetailWindows.size === 0 && app.dock) app.dock.hide();
+  });
+}
+
 function saveToken(newToken) {
   const configDir = path.join(os.homedir(), '.config', 'claude-tray');
   fs.mkdirSync(configDir, { recursive: true });
@@ -246,12 +294,25 @@ function startPoller(pollerToken) {
   });
   activePoller.onConnected = () => {
     isConnected = true;
+    authExpired = false;
     pushConnectionStatus();
     if (!hasUnread) setTrayState(TRAY_STATE.LISTENING);
   };
   activePoller.onDisconnected = () => {
     isConnected = false;
     pushConnectionStatus();
+  };
+  activePoller.onAuthFailed = () => {
+    authExpired = true;
+    setTrayState(TRAY_STATE.IDLE);
+    pushConnectionStatus();
+    const n = new Notification({
+      title: 'Auth Token Expired',
+      body: 'Click to sync token from server',
+      silent: false
+    });
+    n.on('click', () => syncTokenFromServer());
+    n.show();
   };
   activePoller.start(2000);
 }
@@ -332,6 +393,7 @@ app.whenReady().then(() => {
       }},
       { type: 'separator' },
       { label: 'Set Auth Token...', click: () => promptForToken() },
+      { label: 'Sync Token from Server', click: () => syncTokenFromServer() },
       { label: 'Check for Updates', click: () => checkForUpdatesManual() },
       { label: 'Quit', click: () => app.quit() }
     ]);

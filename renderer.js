@@ -30,12 +30,15 @@ tabs.forEach(tab => {
 });
 
 // --- Connection status ---
-window.api.onConnectionStatus(({ connected }) => {
+window.api.onConnectionStatus(({ connected, authExpired }) => {
   const dot = document.getElementById('conn-dot');
   const label = document.getElementById('conn-label');
   if (connected) {
     dot.className = 'connection-dot connected';
     label.textContent = 'Connected';
+  } else if (authExpired) {
+    dot.className = 'connection-dot disconnected';
+    label.textContent = 'Token Expired';
   } else {
     dot.className = 'connection-dot disconnected';
     label.textContent = 'Disconnected';
