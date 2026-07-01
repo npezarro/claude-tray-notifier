@@ -1,5 +1,6 @@
-const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage } = require('electron');
+const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('./lib/server');
@@ -228,50 +229,59 @@ function loadRelayUrl() {
   }
 }
 
+let callbackServer = null;
+
 function syncTokenFromServer() {
   const relayUrl = loadRelayUrl();
   if (!relayUrl) {
-    const { Notification: NativeNotif } = require('electron');
-    new NativeNotif({ title: 'Token Sync Failed', body: 'No relay URL configured' }).show();
+    new Notification({ title: 'Token Sync Failed', body: 'No relay URL configured' }).show();
     return;
   }
 
+  if (callbackServer) {
+    callbackServer.close();
+    callbackServer = null;
+  }
+
   const baseUrl = relayUrl.replace(/\/$/, '');
-  const tokenUrl = `${baseUrl}/tools/claude-tray-token`;
+  const successPage = `<html><body style="font-family:-apple-system,sans-serif;background:#1e1e1e;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+    <div style="text-align:center"><h2 style="color:#4ade80">Token Synced</h2><p>You can close this tab.</p></div></body></html>`;
 
-  const syncWin = new BrowserWindow({
-    width: 500,
-    height: 600,
-    title: 'Sync Auth Token',
-    webPreferences: { contextIsolation: true, nodeIntegration: false }
-  });
-
-  if (app.dock) app.dock.show();
-
-  syncWin.loadURL(tokenUrl);
-
-  syncWin.webContents.on('did-finish-load', async () => {
-    try {
-      const pageText = await syncWin.webContents.executeJavaScript(
-        'document.body.innerText.trim()'
-      );
-      if (pageText && pageText.length >= 32 && pageText.length <= 128 && /^[a-f0-9]+$/.test(pageText)) {
-        token = pageText;
+  callbackServer = http.createServer((req, res) => {
+    const url = new URL(req.url, `http://localhost`);
+    if (url.pathname === '/token-callback') {
+      const newToken = url.searchParams.get('token');
+      if (newToken && newToken.length >= 32 && /^[a-f0-9]+$/.test(newToken)) {
+        token = newToken;
         saveToken(token);
         if (activePoller) activePoller.updateToken(token);
         authExpired = false;
         pushConnectionStatus();
-        syncWin.close();
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(successPage);
         new Notification({ title: 'Token Synced', body: 'Connection restored', silent: false }).show();
+      } else {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Invalid token');
       }
-    } catch (_) {
-      // Page hasn't loaded the token yet (e.g. OIDC redirect in progress)
+      setTimeout(() => { callbackServer.close(); callbackServer = null; }, 2000);
+    } else {
+      res.writeHead(404);
+      res.end();
     }
   });
 
-  syncWin.on('closed', () => {
-    if (sessionDetailWindows.size === 0 && app.dock) app.dock.hide();
+  callbackServer.listen(0, '127.0.0.1', () => {
+    const port = callbackServer.address().port;
+    const callbackUrl = `http://localhost:${port}/token-callback`;
+    const tokenUrl = `${baseUrl}/tools/claude-tray-token?callback=${encodeURIComponent(callbackUrl)}`;
+    shell.openExternal(tokenUrl);
   });
+
+  // Auto-cleanup after 2 minutes if user never completes auth
+  setTimeout(() => {
+    if (callbackServer) { callbackServer.close(); callbackServer = null; }
+  }, 120000);
 }
 
 function saveToken(newToken) {
