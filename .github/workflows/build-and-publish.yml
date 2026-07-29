@@ -169,7 +169,6 @@ jobs:
       # warning if the secrets are absent, since a normal version-bumped release does not
       # depend on it.
       - name: Purge CDN cache for mutable URLs
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' }}
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ZONE: ${{ secrets.CLOUDFLARE_ZONE_ID }}
@@ -177,6 +176,16 @@ jobs:
           VERSION: ${{ needs.check-version.outputs.version }}
         run: |
           set -euo pipefail
+          # This guard lives in the script, NOT in a step-level `if:`. The `secrets` context
+          # is unavailable to step conditionals, and referencing it there makes GitHub reject
+          # the whole workflow file at validation time — which presents as a run with zero
+          # jobs, no logs, no annotations, and the file path shown where the workflow name
+          # should be. Nothing in that failure points at the offending line.
+          # `env:` may reference secrets; `if:` may not.
+          if [ -z "${CF_TOKEN:-}" ] || [ -z "${CF_ZONE:-}" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID unset — skipping CDN purge. A version-bumped release is cache-cold, so this only matters when re-publishing the same version."
+            exit 0
+          fi
           if [ -z "${PUBLIC_DOWNLOAD_URL:-}" ]; then
             echo "::warning::PUBLIC_DOWNLOAD_URL unset — skipping CDN purge."
             exit 0
