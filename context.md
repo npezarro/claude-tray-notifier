@@ -2,7 +2,7 @@
 
 ## Current State
 - Electron menubar app for macOS, polls relay server for Claude Code session notifications
-- Version 1.9.0, unsigned macOS app with shell-based auto-update
+- Version 1.9.1, unsigned macOS app with shell-based auto-update
 - Relay runs inside pezant-tools PM2 process on VM (port 3003, Apache proxied at /api/notify)
 - Hook script at `scripts/claude-tray-hook.sh` sends notifications on Claude Code Stop and Notification events
 - Token auto-sync: right-click menu "Sync Token from Server" or auto-prompted on 401
@@ -95,3 +95,34 @@ No installed app could auto-update. Two independent faults:
   `-L` to prove it is actually downloadable. Following redirects is what catches fault 2.
 - **Retention: keep the 5 newest zips.** Nothing ever pruned, so the directory had reached
   2.1GB across 19 versions on a disk at 81% use. Never touches the manifest or dmg.
+
+### 2026-07-29 follow-up: two more publish faults found by verifying, not assuming
+
+3. **The manifest advertised a dmg that 404'd.** The workflow uploaded the dmg only to the
+   stable name `claude-tray-notifier.dmg`, while `latest-mac.yml` lists it under its
+   versioned name. The updater uses the zip, so nothing complained and the dmg link was
+   simply dead. It slipped past the new verification because that only checked the zip —
+   verification now walks EVERY url in the manifest.
+
+4. **A stale edge object can defeat a correct release.** After re-publishing 1.9.0 a second
+   time, the origin held the new zip and the manifest its new sha512, but the CDN kept
+   serving the FIRST build for that same filename (`cf-cache-status: HIT`, `age: 434`,
+   `max-age=14400`). Same size, HTTP 206, so a status-only check passed — and
+   electron-updater would have refused to install on the sha512 mismatch. Verification now
+   downloads the served zip and compares its hash to the manifest.
+
+   Normal releases are immune: a version bump changes the filename, so the URL is
+   cache-cold. Only re-publishing the same version poisons the cache. A `Purge CDN cache`
+   step now handles that, gated on `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID`.
+   **Not yet enabled** — the existing CF token in privateContext is valid but lacks the
+   Cache Purge permission (API code 10000), so a purge-scoped token is needed.
+
+### Release invariants worth keeping
+- Artifact names must stay **lowercase** (`build.mac.artifactName`) or the origin's
+  lowercasing rewrite 404s them.
+- Upload binaries first, manifest last; manifest via temp name + `mv`.
+- Verify: version matches, every advertised url resolves following redirects, and the
+  served zip's sha512 matches the manifest.
+- `latest-mac.yml` is edge-cacheable (observed 4h TTL), so a release can take up to that
+  long to be noticed by clients unless purged. A CF cache rule bypassing
+  `/downloads/latest-mac.yml` would remove the delay.
