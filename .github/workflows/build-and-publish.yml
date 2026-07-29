@@ -56,41 +56,149 @@ jobs:
       - name: Upload to server
         env:
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          # SSH must target the ORIGIN. VM_HOST is the public hostname, which now sits
+          # behind a CDN that does not proxy port 22, so ssh/ssh-keyscan against it cannot
+          # connect at all. VM_SSH_HOST holds the origin address; it falls back to VM_HOST
+          # for a setup with no CDN in front.
+          VM_SSH_HOST: ${{ secrets.VM_SSH_HOST }}
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
           REMOTE_DIR: ${{ secrets.VM_REMOTE_DIR }}
+          VERSION: ${{ needs.check-version.outputs.version }}
         run: |
-          # Write SSH key
-          mkdir -p ~/.ssh
-          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
+          set -euo pipefail
 
-          # Add host key
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          SSH_TARGET_HOST="${VM_SSH_HOST:-$VM_HOST}"
 
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
-          REMOTE="$VM_USER@$VM_HOST"
-
-          # Ensure directory exists
-          ssh $SSH_OPTS "$REMOTE" "mkdir -p $REMOTE_DIR"
-
-          # Upload update manifest
-          scp $SSH_OPTS dist/latest-mac.yml "$REMOTE:$REMOTE_DIR/latest-mac.yml"
-
-          # Upload zip + blockmap (for auto-updater)
-          scp $SSH_OPTS dist/*.zip "$REMOTE:$REMOTE_DIR/"
-          scp $SSH_OPTS dist/*.zip.blockmap "$REMOTE:$REMOTE_DIR/"
-
-          # Upload dmg (for fresh installs)
-          DMG=$(find dist -maxdepth 1 -name '*.dmg' | head -1)
-          if [ -n "$DMG" ]; then
-            scp $SSH_OPTS "$DMG" "$REMOTE:$REMOTE_DIR/claude-tray-notifier.dmg"
+          # Fail loudly on missing configuration instead of surfacing a confusing
+          # connection error several commands later.
+          missing=""
+          [ -z "$VM_SSH_KEY" ]       && missing="$missing VM_SSH_KEY"
+          [ -z "$SSH_TARGET_HOST" ]  && missing="$missing VM_SSH_HOST/VM_HOST"
+          [ -z "$VM_USER" ]          && missing="$missing VM_USER"
+          [ -z "$REMOTE_DIR" ]       && missing="$missing VM_REMOTE_DIR"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secret(s):$missing"
+            exit 1
           fi
 
-          # Cleanup
-          rm -f ~/.ssh/deploy_key
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          trap 'rm -f ~/.ssh/deploy_key' EXIT
 
-          echo "Uploaded v${{ needs.check-version.outputs.version }}"
+          # Deliberately no ssh-keyscan. It previously ran as
+          #   ssh-keyscan -H "$VM_HOST" >> known_hosts 2>/dev/null
+          # under `bash -e`. Once the hostname moved behind the CDN, keyscan could not reach
+          # port 22, exited non-zero, and killed this step instantly with ZERO output and no
+          # packet ever reaching the server. The publish was silently broken for three
+          # months and presented as a 5-second mystery failure. accept-new records the key
+          # on first use and still refuses a CHANGED key, which is all the keyscan bought.
+          SSH_OPTS=(
+            -i ~/.ssh/deploy_key
+            -o StrictHostKeyChecking=accept-new
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+          )
+          REMOTE="$VM_USER@$SSH_TARGET_HOST"
+
+          echo "Connecting to origin as $VM_USER ..."
+          ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p '$REMOTE_DIR' && echo '  connected'"
+
+          # Order matters: binaries FIRST, manifest LAST.
+          # latest-mac.yml is what advertises a new version to running clients, so if it
+          # lands before the zip it names, any client checking in during the upload window
+          # tries to download a file that does not exist yet.
+          echo "Uploading binaries ..."
+          scp "${SSH_OPTS[@]}" dist/*.zip          "$REMOTE:$REMOTE_DIR/"
+          scp "${SSH_OPTS[@]}" dist/*.zip.blockmap "$REMOTE:$REMOTE_DIR/"
+
+          DMG="$(find dist -maxdepth 1 -name '*.dmg' | head -1)"
+          if [ -n "$DMG" ]; then
+            scp "${SSH_OPTS[@]}" "$DMG" "$REMOTE:$REMOTE_DIR/claude-tray-notifier.dmg"
+          else
+            echo "::warning::No .dmg in dist/ — fresh installs would keep serving the previous image."
+          fi
+
+          # Manifest last, written to a temp name then moved, so no client can read a
+          # half-transferred manifest.
+          echo "Publishing manifest ..."
+          scp "${SSH_OPTS[@]}" dist/latest-mac.yml "$REMOTE:$REMOTE_DIR/.latest-mac.yml.tmp"
+          ssh "${SSH_OPTS[@]}" "$REMOTE" \
+            "mv '$REMOTE_DIR/.latest-mac.yml.tmp' '$REMOTE_DIR/latest-mac.yml'"
+
+          # Retention. Every release adds ~110MB and nothing ever removed the old ones, so
+          # this directory reached 2.1GB across 19 stale versions on a disk at 81% use.
+          # Only versioned *-mac.zip (+ .blockmap) are considered; the manifest and the dmg
+          # are never touched.
+          echo "Pruning old releases, keeping the 5 newest ..."
+          ssh "${SSH_OPTS[@]}" "$REMOTE" "
+            set -eu
+            cd '$REMOTE_DIR' || exit 0
+            ls -1t *-mac.zip 2>/dev/null | tail -n +6 | while IFS= read -r old; do
+              echo \"  removing \$old\"
+              rm -f -- \"\$old\" \"\$old.blockmap\"
+            done
+            echo \"  remaining: \$(ls -1 *-mac.zip 2>/dev/null | wc -l) zip(s), \$(du -sh . | cut -f1) total\"
+          "
+
+          echo "Upload of v$VERSION finished."
+
+      # The old workflow just echoed "Uploaded v<x>" and passed. That is a claim, not a
+      # check: the manifest could be stale, cached, or served from the wrong directory and
+      # the job would still be green. This asserts the published version over HTTPS.
+      - name: Verify the published manifest
+        env:
+          PUBLIC_DOWNLOAD_URL: ${{ secrets.PUBLIC_DOWNLOAD_URL }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PUBLIC_DOWNLOAD_URL:-}" ]; then
+            echo "::warning::PUBLIC_DOWNLOAD_URL is not set — cannot verify the release is actually reachable. Set it to the public downloads URL to enable this check."
+            exit 0
+          fi
+
+          BASE="${PUBLIC_DOWNLOAD_URL%/}"
+
+          # The site is behind a CDN with an edge cache, so an unbusted request can return
+          # the PREVIOUS manifest and make a good deploy look broken (or vice versa).
+          for attempt in 1 2 3 4 5 6; do
+            BODY="$(curl -fsSL --max-time 30 \
+                      -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                      "$BASE/latest-mac.yml?cachebust=$GITHUB_RUN_ID-$attempt" || true)"
+            PUBLISHED="$(printf '%s\n' "$BODY" | awk '/^version:/{print $2; exit}')"
+            echo "attempt $attempt: published version = '${PUBLISHED:-<none>}' (want '$VERSION')"
+            if [ "$PUBLISHED" = "$VERSION" ]; then
+              echo "Manifest verified at $BASE/latest-mac.yml"
+
+              # Confirm the zip the manifest points at is actually downloadable, since a
+              # manifest advertising a missing file is the failure the ordering fix targets.
+              ZIP="$(printf '%s\n' "$BODY" | awk -F'url: ' '/url: .*\.zip$/{print $2; exit}' | tr -d '\r')"
+              if [ -n "$ZIP" ]; then
+                ENC="$(printf '%s' "$ZIP" | sed 's/ /%20/g')"
+                # -L matters: the origin 301-redirects any URL containing capitals to a
+                # lowercased path. That silently turned a "published" release into an
+                # undownloadable one — the redirect looked like a 301 success unless you
+                # followed it to the 404. Following redirects and asserting the FINAL
+                # status is what catches that class of bug.
+                CODE="$(curl -sL -o /dev/null -w '%{http_code}' --max-time 60 -r 0-0 "$BASE/$ENC")"
+                echo "zip '$ZIP' -> final HTTP $CODE"
+                case "$CODE" in
+                  200|206) echo "Release artifact is downloadable." ;;
+                  *) echo "::error::Manifest advertises '$ZIP' but it resolves to HTTP $CODE. If the filename contains capitals, the origin lowercases the URL and the file will 404 — keep artifactName lowercase."; exit 1 ;;
+                esac
+              else
+                echo "::warning::Could not parse a .zip url out of the manifest."
+              fi
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+
+          echo "::error::Published manifest still reports '${PUBLISHED:-<none>}' instead of '$VERSION' after 6 attempts."
+          exit 1
 
       - name: Upload artifacts to GitHub
         uses: actions/upload-artifact@v4
