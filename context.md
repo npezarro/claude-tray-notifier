@@ -58,3 +58,40 @@ is wrong a meaningful fraction of the time, which is why `entrypoint` is used in
 `ERR_INVALID_PROTOCOL`. `fetchConversation` in `main.js` follows the same assumption.
 Fine in production; it just means the poll path cannot be smoke-tested against a local
 http stub.
+
+## 2026-07-29 — release publishing fixed (was silently broken since Jul 1)
+
+`Build & Publish` last succeeded 2026-04-27 and failed every run after 2026-07-01, so
+`/downloads/latest-mac.yml` still advertised **1.7.1** while package.json reached 1.9.0.
+No installed app could auto-update. Two independent faults:
+
+1. **SSH targeted the CDN hostname.** The public hostname moved behind Cloudflare, which
+   does not proxy port 22. The step ran
+   `ssh-keyscan -H "$VM_HOST" >> known_hosts 2>/dev/null` under `bash -e`, so keyscan could
+   not connect, exited non-zero, and killed the step **instantly with zero output and no
+   packet reaching the server** — a 5-second mystery failure. Fixed by a new `VM_SSH_HOST`
+   secret holding the origin address (falls back to `VM_HOST`), and by deleting the keyscan
+   entirely in favour of `StrictHostKeyChecking=accept-new`, which is all it bought.
+
+   **Lesson: never send a diagnostic command's stderr to /dev/null under `set -e`.**
+
+2. **Artifacts were undownloadable even when published.** Apache lowercases any URL
+   containing capitals (`RewriteMap lc int:tolower`, with an exclusion list for
+   `/blog`, `/grocerygenius`, `/sts`). The default electron-builder name is
+   `Claude Tray Notifier-<v>-arm64-mac.zip`, so every artifact URL 301'd to a lowercased
+   path that did not exist and 404'd. Fixed at the source with
+   `build.mac.artifactName = "${name}-${version}-${arch}-mac.${ext}"`, which yields
+   `claude-tray-notifier-<v>-arm64-mac.zip` — lowercase, no spaces, no redirect.
+   **Keep artifact names lowercase.** The alternative (adding `!^/downloads` to the Apache
+   exclusion list) was deliberately not taken, to avoid a production web-server change.
+
+### Other hardening in the same pass
+- **Upload order: binaries first, manifest last.** The manifest advertises the new version,
+  so landing it before the zip meant a client checking in mid-upload would 404.
+- Manifest uploaded to a temp name then `mv`, so no client reads a half-written manifest.
+- **Post-upload verification step.** The job previously echoed `Uploaded v<x>` and passed —
+  a claim, not a check. It now fetches the public manifest (cache-busted, since the CDN
+  edge-caches), asserts the version matches, and range-requests the advertised zip with
+  `-L` to prove it is actually downloadable. Following redirects is what catches fault 2.
+- **Retention: keep the 5 newest zips.** Nothing ever pruned, so the directory had reached
+  2.1GB across 19 versions on a disk at 81% use. Never touches the manifest or dmg.
