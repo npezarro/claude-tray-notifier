@@ -124,20 +124,31 @@ SCRUB_PATTERNS = [
     ),
     # key=value / key: "value" assignment forms (keep the key, drop the value).
     #
-    # The key name is matched with optional surrounding word characters rather than a
-    # \b-anchored keyword, because real credential vars are nearly always prefixed or
-    # suffixed: DISCORD_TOKEN, GITHUB_TOKEN, DB_PASSWORD, MY_API_KEY. A \b before
-    # "token" does not match inside "DISCORD_TOKEN" (both sides are word characters),
-    # so the anchored form silently missed the most common shape there is.
+    # Getting this pattern's tightness right took two passes, both worth recording:
+    #
+    # 1. A \b-anchored keyword (\btoken\b) does NOT match inside DISCORD_TOKEN, because
+    #    both neighbours are word characters. Since real credential vars are almost always
+    #    prefixed (DISCORD_TOKEN, DB_PASSWORD, MY_API_KEY), the anchored form missed the
+    #    single most common shape there is. Hence the optional identifier PREFIX.
+    #
+    # 2. Allowing an arbitrary identifier SUFFIX then over-fired on ordinary prose:
+    #    "webhooks: ..." and "credential-management.md: ..." matched, redacting the next
+    #    word — 121 false positives in a single 21-turn conversation. So the keyword must
+    #    END the identifier: (?![A-Za-z]) after it. "webhooks" ends in 's', so it no longer
+    #    matches, while DISCORD_TOKEN still does.
+    #
+    # The value must also be >=8 non-space chars, which drops prose like "token: general"
+    # while still catching anything credential-sized. The optional quote before the
+    # separator handles JSON ("token": "...").
     (
         re.compile(
             r"(?i)"
-            r"([A-Za-z0-9_.\-]*"
+            r"([A-Za-z0-9_.\-]{0,40}"
             r"(?:password|passwd|secret|api[_-]?key|apikey|access[_-]?token"
-            r"|client[_-]?secret|auth[_-]?token|token|credential|webhook)"
-            r"[A-Za-z0-9_.\-]*"
-            r"\s*[:=]\s*[\"']?)"
-            r"(?!\[REDACTED\])[^\s\"',]{3,}"
+            r"|client[_-]?secret|auth[_-]?token|token|credential)"
+            r"(?![A-Za-z])"
+            r"[\"']?\s*[:=]\s*[\"']?)"
+            r"(?!\[REDACTED\])[^\s\"',]{8,}"
         ),
         _redact_value_after,
     ),
@@ -448,6 +459,21 @@ def apply_caps(result, max_turns, max_bytes, already_dropped):
     result["meta"]["turnCount"] = len(turns)
     result["meta"]["droppedTurns"] = dropped
     result["meta"]["truncated"] = dropped > 0
+
+    # Recount redactions over the turns that actually survived.
+    #
+    # Scrubbing happens while streaming, so the running total also counted redactions in
+    # records that were later discarded (dropped by a cap, or skipped as empty). That
+    # produced a meta line claiming "14 redacted" on output containing zero [REDACTED]
+    # markers — confusing, and it undermines the one number whose job is to tell the
+    # reader how much of what they are looking at was withheld.
+    # The title counts too: it is derived from the first user message, so it can itself
+    # carry a redaction, and it is displayed alongside the turns.
+    result["meta"]["scrubbedCount"] = (result["meta"].get("title") or "").count(REDACTED) + sum(
+        (t.get("text") or "").count(REDACTED)
+        + sum((tool.get("label") or "").count(REDACTED) for tool in t.get("tools") or [])
+        for t in turns
+    )
 
 
 # --- entrypoint --------------------------------------------------------------
