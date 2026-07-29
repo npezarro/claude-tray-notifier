@@ -126,6 +126,70 @@ describe('distill-transcript.py', () => {
     assert.match(text, /DISCORD_TOKEN/);
   });
 
+  // Regression: an over-broad key pattern matched the keyword INSIDE longer words, so
+  // "webhooks: ..." and "credential-management.md: ..." redacted the following word —
+  // 121 false positives in one 21-turn conversation. The keyword must end the identifier.
+  it('does not redact prose that merely contains a credential keyword', (t) => {
+    if (!pythonOk) return t.skip('python3 unavailable');
+    const prose = [
+      'webhooks: see the discord integration doc',
+      'credential-management.md: Cross-repo env vars and shared keys',
+      'token: general',
+      'The secret: be consistent',
+      'Do not regenerate NOTIFY_TOKEN because the app has it baked in',
+      'password reset flow is broken',
+      'api_key handling needs review'
+    ].join('\n');
+    const got = run(fixture([userRec(prose)]));
+    assert.strictEqual(got.turns[0].text, prose, 'prose must pass through untouched');
+    assert.strictEqual(got.meta.scrubbedCount, 0);
+  });
+
+  it('still redacts prefixed credential vars, which are the common real shape', (t) => {
+    if (!pythonOk) return t.skip('python3 unavailable');
+    const cases = [
+      'export DISCORD_TOKEN="FAKEtoken0123456789abcdef"',
+      'GITHUB_TOKEN=ghfake0123456789abcdefghij',
+      'DB_PASSWORD = superSecretValue123',
+      'MY_API_KEY: abcdefgh12345678',
+      '"token": "aaaaaaaaaaaaaaaaaaaa"',
+      'client_secret=GOCSPX-fakefakefakefake'
+    ];
+    const got = run(fixture([userRec(cases.join('\n'))]));
+    const text = got.turns[0].text;
+    assert.strictEqual((text.match(/\[REDACTED\]/g) || []).length, cases.length);
+    // Key names are useful context and must survive; only values go.
+    for (const key of ['DISCORD_TOKEN', 'GITHUB_TOKEN', 'DB_PASSWORD', 'MY_API_KEY', 'client_secret']) {
+      assert.ok(text.includes(key), `key name lost: ${key}`);
+    }
+  });
+
+  // Regression: scrubbing runs while streaming, so the running total also counted
+  // redactions in records later discarded by a cap — meta claimed "14 redacted" on output
+  // containing zero markers.
+  it('reports scrubbedCount for surviving turns only', (t) => {
+    if (!pythonOk) return t.skip('python3 unavailable');
+    const records = [];
+    // Oldest turns carry the secrets and will be truncated away.
+    for (let i = 0; i < 6; i += 1) {
+      records.push(userRec(`OLD_API_KEY: secretvalue${i}0000000`));
+      records.push(asstRec([{ type: 'text', text: `old reply ${i}` }]));
+    }
+    for (let i = 0; i < 3; i += 1) {
+      records.push(userRec(`clean recent question ${i}`));
+      records.push(asstRec([{ type: 'text', text: `clean recent answer ${i}` }]));
+    }
+    const got = run(fixture(records), ['--max-turns', '4']);
+    const actual = (JSON.stringify(got).match(/\[REDACTED\]/g) || []).length;
+    assert.strictEqual(got.meta.truncated, true);
+    assert.strictEqual(got.meta.scrubbedCount, actual,
+      'scrubbedCount must match the redactions actually present in the output');
+    // The surviving turns are all clean; the only redaction left is in the title, which is
+    // derived from the (dropped) first user message and is still displayed.
+    assert.ok(!got.turns.some((x) => (x.text || '').includes('[REDACTED]')),
+      'the retained turns should carry no redactions in this fixture');
+  });
+
   it('reports truncation instead of silently dropping turns', (t) => {
     if (!pythonOk) return t.skip('python3 unavailable');
     const records = [];
