@@ -155,6 +155,61 @@ jobs:
 
           echo "Upload of v$VERSION finished."
 
+      # Invalidate the edge cache for the mutable URLs.
+      #
+      # Versioned artifact URLs are immutable, so a normal release (new version => new
+      # filename) is inherently cache-safe. Two cases are not:
+      #   - latest-mac.yml never changes name, so a client can read a stale manifest for as
+      #     long as the edge TTL (observed: max-age=14400, i.e. 4h) and not notice a release.
+      #   - re-publishing the SAME version overwrites a filename the edge already has. The
+      #     manifest then advertises a hash the CDN does not serve, and electron-updater
+      #     correctly refuses to install. Observed exactly this after republishing 1.9.0.
+      #
+      # Optional: needs a Cloudflare token with the Cache Purge permission. Skipped with a
+      # warning if the secrets are absent, since a normal version-bumped release does not
+      # depend on it.
+      - name: Purge CDN cache for mutable URLs
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' }}
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          PUBLIC_DOWNLOAD_URL: ${{ secrets.PUBLIC_DOWNLOAD_URL }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PUBLIC_DOWNLOAD_URL:-}" ]; then
+            echo "::warning::PUBLIC_DOWNLOAD_URL unset — skipping CDN purge."
+            exit 0
+          fi
+          BASE="${PUBLIC_DOWNLOAD_URL%/}"
+          PAYLOAD="$(python3 - "$BASE" "$VERSION" <<'PY'
+          import json, sys
+          base, version = sys.argv[1], sys.argv[2]
+          stem = f"claude-tray-notifier-{version}-arm64-mac"
+          files = [
+              f"{base}/latest-mac.yml",
+              f"{base}/claude-tray-notifier.dmg",
+              f"{base}/{stem}.zip",
+              f"{base}/{stem}.zip.blockmap",
+              f"{base}/{stem}.dmg",
+          ]
+          print(json.dumps({"files": files}))
+          PY
+          )"
+          RESP="$(curl -s --max-time 30 -X POST \
+            "https://api.cloudflare.com/client/v4/zones/$CF_ZONE/purge_cache" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD")"
+          if printf '%s' "$RESP" | grep -q '"success":true'; then
+            echo "Edge cache purged for the release URLs."
+          else
+            # Not fatal: a version-bumped release is cache-cold anyway, and the verification
+            # step below is the real gate. A purge token lacking the Cache Purge permission
+            # returns code 10000 here.
+            echo "::warning::CDN purge failed (a token needs the Cache Purge permission): $RESP"
+          fi
+
       # The old workflow just echoed "Uploaded v<x>" and passed. That is a claim, not a
       # check: the manifest could be stale, cached, or served from the wrong directory and
       # the job would still be green. This asserts the published version over HTTPS.
@@ -218,6 +273,30 @@ jobs:
                 exit 1
               fi
               echo "All advertised release artifacts are downloadable."
+
+              # Integrity: hash the bytes the CDN actually serves and compare against the
+              # manifest. An HTTP 200/206 only proves something is there — it happily
+              # returns a STALE cached object of the right size, which electron-updater
+              # then rejects on the sha512 check. That failure surfaces to the user as a
+              # broken update, while CI stays green. Observed after republishing a version.
+              ZIP="$(printf '%s\n' "$BODY" | awk -F'url: ' '/url: .*\.zip$/{print $2; exit}' | tr -d '\r')"
+              EXPECT_HASH="$(printf '%s\n' "$BODY" | awk '/sha512:/{print $2; exit}' | tr -d '\r')"
+              if [ -n "$ZIP" ] && [ -n "$EXPECT_HASH" ]; then
+                ENC="$(printf '%s' "$ZIP" | sed 's/ /%20/g')"
+                echo "Verifying sha512 of the served zip (~110MB) ..."
+                ACTUAL_HASH="$(curl -fsSL --max-time 300 "$BASE/$ENC" \
+                  | openssl dgst -sha512 -binary | base64 | tr -d '\n')"
+                if [ "$ACTUAL_HASH" = "$EXPECT_HASH" ]; then
+                  echo "Integrity OK — the served zip matches the manifest hash."
+                else
+                  echo "::error::Served zip does not match the manifest sha512. The CDN is almost certainly serving a stale cached object for this filename (re-publishing the same version does that). Bump the version or purge the edge cache for this URL."
+                  echo "  manifest: $EXPECT_HASH"
+                  echo "  served  : $ACTUAL_HASH"
+                  exit 1
+                fi
+              else
+                echo "::warning::Could not parse a zip url + sha512 pair for the integrity check."
+              fi
               exit 0
             fi
             sleep $((attempt * 10))
