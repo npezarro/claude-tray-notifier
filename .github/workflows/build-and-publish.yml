@@ -114,9 +114,19 @@ jobs:
           scp "${SSH_OPTS[@]}" dist/*.zip          "$REMOTE:$REMOTE_DIR/"
           scp "${SSH_OPTS[@]}" dist/*.zip.blockmap "$REMOTE:$REMOTE_DIR/"
 
+          # The dmg goes up under BOTH names.
+          #
+          # latest-mac.yml lists the dmg under its VERSIONED name, so uploading only to the
+          # stable name left the manifest advertising a URL that 404'd. The versioned copy
+          # is also immutable, which means the CDN can never serve a stale one — the stable
+          # link had been serving an April build for three months because its URL never
+          # changes and the edge cache has a 4h TTL.
           DMG="$(find dist -maxdepth 1 -name '*.dmg' | head -1)"
           if [ -n "$DMG" ]; then
-            scp "${SSH_OPTS[@]}" "$DMG" "$REMOTE:$REMOTE_DIR/claude-tray-notifier.dmg"
+            scp "${SSH_OPTS[@]}" "$DMG" "$REMOTE:$REMOTE_DIR/"
+            # Stable convenience URL for the install page / setup script.
+            ssh "${SSH_OPTS[@]}" "$REMOTE" \
+              "cp -f '$REMOTE_DIR/$(basename "$DMG")' '$REMOTE_DIR/claude-tray-notifier.dmg'"
           else
             echo "::warning::No .dmg in dist/ — fresh installs would keep serving the previous image."
           fi
@@ -175,23 +185,39 @@ jobs:
 
               # Confirm the zip the manifest points at is actually downloadable, since a
               # manifest advertising a missing file is the failure the ordering fix targets.
-              ZIP="$(printf '%s\n' "$BODY" | awk -F'url: ' '/url: .*\.zip$/{print $2; exit}' | tr -d '\r')"
-              if [ -n "$ZIP" ]; then
-                ENC="$(printf '%s' "$ZIP" | sed 's/ /%20/g')"
+              # Check EVERY artifact the manifest advertises, not just the zip. Verifying
+              # only the zip is how a manifest that advertised a 404'ing dmg shipped: the
+              # updater uses the zip, so nothing complained, and the dmg link was dead.
+              ARTIFACTS="$(printf '%s\n' "$BODY" \
+                | awk -F'url: ' '/^[[:space:]]*-?[[:space:]]*url: /{print $2}' | tr -d '\r')"
+              if [ -z "$ARTIFACTS" ]; then
+                echo "::error::Could not parse any artifact url out of the manifest."
+                exit 1
+              fi
+
+              # Process substitution, not a pipe: a piped while-loop runs in a subshell and
+              # FAILED would not survive it. Not a heredoc either — a heredoc terminator
+              # inside a YAML block scalar is needlessly fragile.
+              FAILED=0
+              while IFS= read -r ART; do
+                [ -n "$ART" ] || continue
+                ENC="$(printf '%s' "$ART" | sed 's/ /%20/g')"
                 # -L matters: the origin 301-redirects any URL containing capitals to a
                 # lowercased path. That silently turned a "published" release into an
-                # undownloadable one — the redirect looked like a 301 success unless you
-                # followed it to the 404. Following redirects and asserting the FINAL
-                # status is what catches that class of bug.
-                CODE="$(curl -sL -o /dev/null -w '%{http_code}' --max-time 60 -r 0-0 "$BASE/$ENC")"
-                echo "zip '$ZIP' -> final HTTP $CODE"
+                # undownloadable one — the redirect looks like a 301 success unless you
+                # follow it to the 404. Asserting the FINAL status is what catches it.
+                CODE="$(curl -sL -o /dev/null -w '%{http_code}' --max-time 90 -r 0-0 "$BASE/$ENC")"
                 case "$CODE" in
-                  200|206) echo "Release artifact is downloadable." ;;
-                  *) echo "::error::Manifest advertises '$ZIP' but it resolves to HTTP $CODE. If the filename contains capitals, the origin lowercases the URL and the file will 404 — keep artifactName lowercase."; exit 1 ;;
+                  200|206) echo "  OK   $ART -> HTTP $CODE" ;;
+                  *)       echo "  FAIL $ART -> HTTP $CODE"; FAILED=1 ;;
                 esac
-              else
-                echo "::warning::Could not parse a .zip url out of the manifest."
+              done < <(printf '%s\n' "$ARTIFACTS")
+
+              if [ "$FAILED" -ne 0 ]; then
+                echo "::error::The manifest advertises artifact(s) that are not downloadable. A filename containing capitals gets lowercased by the origin and will 404 — keep artifactName lowercase, and upload every name the manifest references."
+                exit 1
               fi
+              echo "All advertised release artifacts are downloadable."
               exit 0
             fi
             sleep $((attempt * 10))
