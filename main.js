@@ -1,17 +1,29 @@
 const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('./lib/server');
 const { loadToken } = require('./lib/auth');
 const { Poller } = require('./lib/poller');
-const { formatNotification, buildHistoryEntry, MAX_NOTIFICATIONS } = require('./lib/format');
+const {
+  formatNotification, buildHistoryEntry, MAX_NOTIFICATIONS, normalizeOrigin, shouldNotify, SYSTEM
+} = require('./lib/format');
 const { setupAutoUpdater, checkForUpdatesManual } = require('./lib/updater');
 const sessionRegistry = require('./lib/sessions');
 
 const PORT = 9377;
 const notifications = [];
+
+// System-generated sessions (headless runners, scheduled agents) are kept in their own
+// list and are muted: no OS notification, no sound, no tray colour change. They
+// outnumber interactive sessions by roughly 3:1 in practice, so mixing them into the
+// main feed buried the sessions the user was actually waiting on.
+const systemNotifications = [];
+const MAX_SYSTEM_NOTIFICATIONS = 60;
+let systemMuted = true;
+
 const sessionDetailWindows = new Map(); // sessionId -> BrowserWindow
 const activeNotifications = new Set(); // prevent GC of native notifications before click
 const MAX_DETAIL_WINDOWS = 5;
@@ -46,13 +58,39 @@ function pushConnectionStatus() {
   }
 }
 
+function pushSystemUpdate() {
+  if (dropdownWindow && !dropdownWindow.isDestroyed()) {
+    dropdownWindow.webContents.send('system-updated', {
+      notifications: systemNotifications,
+      muted: systemMuted
+    });
+  }
+}
+
 function showNotification(payload) {
+  // Always record the session, whatever its origin — the System tab and the session
+  // detail window both read from the registry.
+  const session = sessionRegistry.addNotification(payload);
+
+  if (normalizeOrigin(payload.origin) === SYSTEM) {
+    systemNotifications.unshift(buildHistoryEntry(payload));
+    if (systemNotifications.length > MAX_SYSTEM_NOTIFICATIONS) {
+      systemNotifications.length = MAX_SYSTEM_NOTIFICATIONS;
+    }
+    pushSystemUpdate();
+  }
+
+  // Muted means muted: no native notification, no tray state change, no sound. The
+  // unmute override exists for when the user is deliberately watching a runner.
+  if (!shouldNotify(payload, systemMuted)) return;
+
+  showInteractiveNotification(payload, session);
+}
+
+function showInteractiveNotification(payload, session) {
   const { title, body } = formatNotification(payload);
 
   const notification = new Notification({ title, body, silent: false });
-
-  // Track in session registry (before show, so click handler can reference it)
-  const session = sessionRegistry.addNotification(payload);
 
   // Track latest notification's session for app activate handler
   if (session) lastNotificationSessionId = session.sessionId;
@@ -142,6 +180,7 @@ function createWindow() {
   // Send connection status once the page loads
   dropdownWindow.webContents.on('did-finish-load', () => {
     pushConnectionStatus();
+    pushSystemUpdate();
   });
 }
 
@@ -160,6 +199,7 @@ function showWindow() {
   dropdownWindow.show();
   dropdownWindow.focus();
   dropdownWindow.webContents.send('notifications-updated', notifications);
+  pushSystemUpdate();
   pushConnectionStatus();
 
   // Opening the dropdown marks notifications as read
@@ -218,6 +258,67 @@ function openSessionDetail(sessionData) {
 
   // Show dock icon when a detail window is open
   if (app.dock) app.dock.show();
+}
+
+function setSystemMuted(next) {
+  systemMuted = !!next;
+  pushSystemUpdate();
+}
+
+/**
+ * Fetch a session's full conversation from the relay.
+ *
+ * The relay does not store conversation text; it pulls it from the machine that produced
+ * the session. That means this can legitimately fail (that machine may be off), so the
+ * renderer is given a structured error to display rather than a bare rejection.
+ */
+function fetchConversation(sessionId) {
+  return new Promise((resolve) => {
+    const relayUrl = loadRelayUrl();
+    if (!relayUrl) {
+      return resolve({ ok: false, error: 'no_relay', message: 'No relay URL configured' });
+    }
+    if (!token) {
+      return resolve({ ok: false, error: 'no_token', message: 'No auth token configured' });
+    }
+
+    const base = relayUrl.replace(/\/$/, '');
+    const url = new URL(`${base}/api/notify/conversation/${encodeURIComponent(sessionId)}`);
+    const req = https.request(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      timeout: 30000
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch (_e) {
+          return resolve({
+            ok: false, error: 'malformed_response',
+            message: `Relay returned a non-JSON response (HTTP ${res.statusCode})`
+          });
+        }
+        if (res.statusCode === 200) return resolve({ ok: true, conversation: parsed });
+        resolve({
+          ok: false,
+          error: parsed.error || `http_${res.statusCode}`,
+          message: parsed.message || `Relay returned HTTP ${res.statusCode}`
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false, error: 'timeout', message: 'The relay did not respond in time' });
+    });
+    req.on('error', (e) => {
+      resolve({ ok: false, error: 'network', message: e.message });
+    });
+    req.end();
+  });
 }
 
 function loadRelayUrl() {
@@ -402,6 +503,21 @@ app.whenReady().then(() => {
         setTrayState(TRAY_STATE.LISTENING);
       }},
       { type: 'separator' },
+      {
+        label: `${systemNotifications.length} system event${systemNotifications.length !== 1 ? 's' : ''}`,
+        enabled: false
+      },
+      {
+        label: 'Mute System Sessions',
+        type: 'checkbox',
+        checked: systemMuted,
+        click: () => setSystemMuted(!systemMuted)
+      },
+      { label: 'Clear System Queue', click: () => {
+        systemNotifications.length = 0;
+        pushSystemUpdate();
+      }},
+      { type: 'separator' },
       { label: 'Set Auth Token...', click: () => promptForToken() },
       { label: 'Sync Token from Server', click: () => syncTokenFromServer() },
       { label: 'Check for Updates', click: () => checkForUpdatesManual() },
@@ -445,8 +561,20 @@ ipcMain.on('clear-notifications', () => {
   }
 });
 
-ipcMain.handle('get-sessions', () => {
-  return sessionRegistry.getSessions();
+ipcMain.handle('get-sessions', (_event, origin) => {
+  return sessionRegistry.getSessions(origin);
+});
+
+ipcMain.handle('get-system-notifications', () => {
+  return { notifications: systemNotifications, muted: systemMuted };
+});
+
+ipcMain.on('set-system-muted', (_event, muted) => {
+  setSystemMuted(muted);
+});
+
+ipcMain.handle('fetch-conversation', (_event, sessionId) => {
+  return fetchConversation(sessionId);
 });
 
 ipcMain.handle('get-session', (_event, sessionId) => {

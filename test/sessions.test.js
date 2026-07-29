@@ -142,3 +142,49 @@ describe('sessions', () => {
     });
   });
 });
+
+// ============ origin tracking ============
+
+describe('session origin', () => {
+  beforeEach(() => { sessions.clear(); });
+
+  it('records a normalized origin and host', () => {
+    sessions.addNotification(makePayload({ origin: 'interactive', host: 'box-1' }));
+    const s = sessions.getSession('sess-001');
+    assert.strictEqual(s.origin, 'interactive');
+    assert.strictEqual(s.host, 'box-1');
+  });
+
+  it('defaults an unlabelled session to system', () => {
+    sessions.addNotification(makePayload());
+    assert.strictEqual(sessions.getSession('sess-001').origin, 'system');
+  });
+
+  // A session that proved itself interactive must not be re-muted by a later event
+  // that happens to arrive without the field (e.g. a Notification-type hook fire).
+  it('upgrades to interactive but never downgrades', () => {
+    sessions.addNotification(makePayload({ origin: 'system' }));
+    sessions.addNotification(makePayload({ origin: 'interactive' }));
+    assert.strictEqual(sessions.getSession('sess-001').origin, 'interactive');
+    sessions.addNotification(makePayload({ origin: undefined }));
+    assert.strictEqual(sessions.getSession('sess-001').origin, 'interactive',
+      'a later unlabelled event must not re-mute a known interactive session');
+  });
+
+  it('filters getSessions by origin', () => {
+    sessions.addNotification(makePayload({ session_id: 'a', origin: 'interactive' }));
+    sessions.addNotification(makePayload({ session_id: 'b', origin: 'system' }));
+    assert.deepStrictEqual(sessions.getSessions('interactive').map(s => s.sessionId), ['a']);
+    assert.deepStrictEqual(sessions.getSessions('system').map(s => s.sessionId), ['b']);
+    assert.strictEqual(sessions.getSessions().length, 2, 'no filter returns everything');
+  });
+
+  it('counts by origin', () => {
+    sessions.addNotification(makePayload({ session_id: 'a', origin: 'interactive' }));
+    sessions.addNotification(makePayload({ session_id: 'b', origin: 'system' }));
+    sessions.addNotification(makePayload({ session_id: 'c', origin: 'system' }));
+    assert.strictEqual(sessions.size('interactive'), 1);
+    assert.strictEqual(sessions.size('system'), 2);
+    assert.strictEqual(sessions.size(), 3);
+  });
+});

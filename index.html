@@ -59,8 +59,31 @@
       color: #e0e0e0;
       border-bottom-color: #c4944a;
     }
+    .tab .badge {
+      display: inline-block;
+      min-width: 15px;
+      margin-left: 5px;
+      padding: 0 4px;
+      border-radius: 8px;
+      background: #333;
+      color: #999;
+      font-size: 10px;
+      text-align: center;
+    }
+    .tab .badge.hidden { display: none; }
     .panel { display: none; }
     .panel.active { display: block; }
+    .system-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-bottom: 1px solid #2a2a2a;
+      font-size: 11px;
+      color: #888;
+    }
+    .system-bar label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    .system-bar .note { flex: 1; color: #666; }
     .empty {
       padding: 40px 16px;
       text-align: center;
@@ -203,12 +226,20 @@
   <div class="tab-bar">
     <div class="tab active" data-tab="notifications">Notifications</div>
     <div class="tab" data-tab="sessions">Sessions</div>
+    <div class="tab" data-tab="system">System<span class="badge hidden" id="system-badge">0</span></div>
   </div>
   <div id="notifications-panel" class="panel active">
     <div id="list"><div class="empty">No notifications yet</div></div>
   </div>
   <div id="sessions-panel" class="panel">
     <div id="sessions-list"><div class="empty">No sessions yet</div></div>
+  </div>
+  <div id="system-panel" class="panel">
+    <div class="system-bar">
+      <span class="note">Headless runs. Muted: no sound or alert.</span>
+      <label><input type="checkbox" id="system-mute" checked> Muted</label>
+    </div>
+    <div id="system-list"><div class="empty">No system events yet</div></div>
   </div>
   <div class="footer">
     <button id="clear">Clear All</button>

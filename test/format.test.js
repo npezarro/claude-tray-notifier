@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { INPUT_KIND_LABELS, MAX_NOTIFICATIONS, formatNotification, buildHistoryEntry } = require('../lib/format');
+const { INPUT_KIND_LABELS, MAX_NOTIFICATIONS, formatNotification, buildHistoryEntry, normalizeOrigin, shouldNotify } = require('../lib/format');
 
 describe('INPUT_KIND_LABELS', () => {
   it('has all expected keys', () => {
@@ -155,5 +155,59 @@ describe('buildHistoryEntry', () => {
   it('falls back to project when conv_title missing', () => {
     const entry = buildHistoryEntry({ type: 'done', project: 'fallback-proj' });
     assert.strictEqual(entry.convTitle, 'fallback-proj');
+  });
+});
+
+// ============ origin routing ============
+
+describe('normalizeOrigin', () => {
+  it('keeps an explicit interactive label', () => {
+    assert.strictEqual(normalizeOrigin('interactive'), 'interactive');
+  });
+
+  // Fail closed: an unlabelled sender (older hook, un-updated runner) must be muted.
+  it('fails closed to system for anything else', () => {
+    for (const v of [undefined, null, '', 'system', 'Interactive', 'INTERACTIVE', 0, {}]) {
+      assert.strictEqual(normalizeOrigin(v), 'system', `value: ${JSON.stringify(v)}`);
+    }
+  });
+});
+
+describe('shouldNotify', () => {
+  it('always notifies for an interactive session', () => {
+    assert.strictEqual(shouldNotify({ origin: 'interactive' }, true), true);
+    assert.strictEqual(shouldNotify({ origin: 'interactive' }, false), true);
+  });
+
+  it('suppresses a system session while muted', () => {
+    assert.strictEqual(shouldNotify({ origin: 'system' }, true), false);
+  });
+
+  it('notifies for a system session once unmuted', () => {
+    assert.strictEqual(shouldNotify({ origin: 'system' }, false), true);
+  });
+
+  // This is the regression that matters: an unlabelled payload must not ping while muted.
+  it('suppresses an unlabelled payload while muted', () => {
+    assert.strictEqual(shouldNotify({}, true), false);
+    assert.strictEqual(shouldNotify({ origin: 'bogus' }, true), false);
+    assert.strictEqual(shouldNotify(null, true), false);
+    assert.strictEqual(shouldNotify(undefined, true), false);
+  });
+});
+
+describe('buildHistoryEntry origin/host', () => {
+  it('records a normalized origin and the source host', () => {
+    const e = buildHistoryEntry({
+      type: 'response_complete', project: 'p', origin: 'interactive', host: 'box-1'
+    });
+    assert.strictEqual(e.origin, 'interactive');
+    assert.strictEqual(e.host, 'box-1');
+  });
+
+  it('defaults an unlabelled payload to system with an empty host', () => {
+    const e = buildHistoryEntry({ type: 'response_complete', project: 'p' });
+    assert.strictEqual(e.origin, 'system');
+    assert.strictEqual(e.host, '');
   });
 });
