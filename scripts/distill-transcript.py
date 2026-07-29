@@ -361,9 +361,26 @@ def distill(path, session_id, max_turns):
         if ts:
             last_ts = ts
 
-        turns.append(
-            {"role": role, "timestamp": ts, "text": text, "tools": tools}
-        )
+        # Merge consecutive same-role records into one logical turn.
+        #
+        # One assistant reply is stored as several records (prose, then a tool call, then
+        # more prose...). Emitting each as its own "turn" is both misleading and wasteful:
+        # on a real session 221 of 300 emitted turns were single tool calls, so the
+        # max_turns budget was ~74% tool chatter and the actual exchanges got truncated
+        # away. Merging makes a turn mean what a reader expects it to mean.
+        if turns and turns[-1]["role"] == role:
+            prev = turns[-1]
+            if text:
+                prev["text"] = (prev["text"] + "\n\n" + text) if prev["text"] else text
+            if tools:
+                prev["tools"].extend(tools)
+            if ts:
+                prev["timestamp"] = prev["timestamp"] or ts
+        else:
+            turns.append(
+                {"role": role, "timestamp": ts, "text": text, "tools": tools}
+            )
+
         if role == "user" and first_user_text is None:
             first_user_text = text
 
