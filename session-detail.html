@@ -43,10 +43,86 @@
       color: #555;
       margin-top: 4px;
     }
+    .view-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      border-bottom: 1px solid #2a2a2a;
+      background: #212121;
+      flex-shrink: 0;
+    }
+    .view-tab {
+      padding: 4px 10px;
+      font-size: 12px;
+      color: #888;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .view-tab:hover { color: #bbb; }
+    .view-tab.active { background: #333; color: #e0e0e0; }
+    .view-bar .spacer { flex: 1; }
+    .view-bar .hint { font-size: 10px; color: #555; }
     .timeline {
       padding: 12px 20px;
       overflow-y: auto;
       flex: 1;
+    }
+    .timeline.hidden { display: none; }
+    .conversation {
+      padding: 12px 20px 32px;
+      overflow-y: auto;
+      flex: 1;
+      display: none;
+    }
+    .conversation.visible { display: block; }
+    .conv-meta {
+      font-family: monospace;
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 14px;
+      word-break: break-all;
+    }
+    .conv-trunc {
+      font-size: 11px;
+      color: #c4b44a;
+      margin-bottom: 12px;
+    }
+    .turn { margin-bottom: 16px; }
+    .turn-role {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #666;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    .turn.user .turn-role { color: #7aaed4; }
+    .turn.assistant .turn-role { color: #b49adb; }
+    .turn-text {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+      background: #252525;
+      border: 1px solid #2f2f2f;
+      border-radius: 5px;
+      padding: 9px 11px;
+    }
+    .turn.user .turn-text { background: #1e2530; }
+    .turn-tools { margin-top: 5px; }
+    .turn-tool {
+      font-family: monospace;
+      font-size: 10.5px;
+      color: #666;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+    .turn-tool b { color: #8a8a8a; font-weight: 500; }
+    .conv-state { padding: 40px 20px; text-align: center; color: #888; }
+    .conv-state .big { font-size: 14px; color: #e0e0e0; margin-bottom: 6px; }
+    .conv-state button {
+      margin-top: 14px; padding: 6px 14px; border: 1px solid #555;
+      border-radius: 4px; background: #333; color: #e0e0e0; cursor: pointer; font: inherit;
     }
     .event {
       padding: 8px 12px;
@@ -110,9 +186,16 @@
     </div>
     <div class="session-id" id="session-id"></div>
   </div>
+  <div class="view-bar">
+    <div class="view-tab active" data-view="timeline">Events</div>
+    <div class="view-tab" data-view="conversation">Conversation</div>
+    <span class="spacer"></span>
+    <span class="hint" id="view-hint"></span>
+  </div>
   <div class="timeline" id="timeline">
     <div class="empty">Loading events...</div>
   </div>
+  <div class="conversation" id="conversation"></div>
   <script src="session-renderer.js"></script>
 </body>
 </html>

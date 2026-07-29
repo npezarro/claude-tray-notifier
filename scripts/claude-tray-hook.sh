@@ -12,6 +12,7 @@ TOKEN_PATH="${CLAUDE_TRAY_TOKEN_PATH:-$HOME/.config/claude-tray/token}"
 NOTIFY_URL="${CLAUDE_TRAY_NOTIFY_URL:-}"
 [ -z "$NOTIFY_URL" ] && exit 0
 TITLE_CACHE_DIR="$HOME/.cache/claude-tray-titles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Read token — exit silently if missing
 TOKEN=$(cat "$TOKEN_PATH" 2>/dev/null || true)
@@ -28,56 +29,48 @@ LAST_MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null || 
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
 SUMMARY=$(echo "$LAST_MSG" | head -c 200)
 
-# --- Conversation title ---
-# Cache per session so we only parse the transcript once
+# --- Origin classification + conversation title ---
+#
+# Both come from one pass over the transcript in lib/origin.js. Origin decides whether
+# this notification pings at all: sessions the user is driving are "interactive", headless
+# runners are "system" and are muted. The classifier fails closed to "system", so a
+# session it cannot identify is quietly queued rather than allowed to interrupt.
+#
+# Cached per session, but only once the title is the model-generated one — early in a
+# session only a first-message fallback is available, and caching that would pin a worse
+# title for the whole session.
 mkdir -p "$TITLE_CACHE_DIR" 2>/dev/null || true
-TITLE_CACHE="$TITLE_CACHE_DIR/$SESSION_ID"
-CONV_TITLE=""
+META_CACHE="$TITLE_CACHE_DIR/$SESSION_ID.json"
+META=""
 
-if [ -f "$TITLE_CACHE" ]; then
-  CONV_TITLE=$(cat "$TITLE_CACHE")
-elif [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-  # Extract first human message from JSONL transcript and summarize to a title
-  CONV_TITLE=$(python3 -c "
-import json, sys
-title = ''
-try:
-    with open(sys.argv[1]) as f:
-        for line in f:
-            try:
-                msg = json.loads(line)
-            except:
-                continue
-            # Look for first human/user message
-            role = msg.get('role', '')
-            if role in ('human', 'user'):
-                content = msg.get('content', '')
-                if isinstance(content, list):
-                    # Extract text from content blocks
-                    parts = [b.get('text', '') for b in content if isinstance(b, dict) and b.get('type') == 'text']
-                    content = ' '.join(parts)
-                # Clean up: first meaningful line, strip system tags
-                for line in content.split('\n'):
-                    line = line.strip()
-                    if line and not line.startswith('<system') and not line.startswith('<!--'):
-                        title = line[:80]
-                        break
-                if title:
-                    break
-except:
-    pass
-print(title)
-" "$TRANSCRIPT" 2>/dev/null || echo "")
-  # Cache it
-  if [ -n "$CONV_TITLE" ] && [ -n "$SESSION_ID" ]; then
-    echo "$CONV_TITLE" > "$TITLE_CACHE" 2>/dev/null || true
+if [ -f "$META_CACHE" ]; then
+  META=$(cat "$META_CACHE" 2>/dev/null || true)
+fi
+
+if [ -z "$META" ]; then
+  META=$(node "$SCRIPT_DIR/../lib/origin.js" "$TRANSCRIPT" 2>/dev/null || true)
+  if [ -n "$META" ] && [ -n "$SESSION_ID" ]; then
+    case "$META" in
+      *'"titleSource":"aiTitle"'*) echo "$META" > "$META_CACHE" 2>/dev/null || true ;;
+    esac
   fi
 fi
+
+ORIGIN=$(echo "$META" | jq -r '.origin // ""' 2>/dev/null || echo "")
+ENTRYPOINT=$(echo "$META" | jq -r '.entrypoint // ""' 2>/dev/null || echo "")
+CONV_TITLE=$(echo "$META" | jq -r '.title // ""' 2>/dev/null || echo "")
+
+# Fail closed: if the classifier produced nothing usable, treat this as a system session
+# so a broken classifier degrades into silence rather than into noise.
+[ "$ORIGIN" = "interactive" ] || ORIGIN="system"
 
 # Fallback to project name
 [ -z "$CONV_TITLE" ] && CONV_TITLE="$PROJECT"
 
-# Clean stale title caches (older than 24h)
+# Which machine ran this — the relay uses it to route a conversation pull back here.
+HOST=$(hostname -s 2>/dev/null || echo "unknown")
+
+# Clean stale caches (older than 24h)
 find "$TITLE_CACHE_DIR" -type f -mtime +1 -delete 2>/dev/null || true
 
 # --- Input type classification ---
@@ -121,7 +114,10 @@ PAYLOAD=$(jq -n \
   --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg conv_title "$CONV_TITLE" \
   --arg input_kind "$INPUT_KIND" \
-  '{type:$type,session_id:$session_id,project:$project,cwd:$cwd,summary:$summary,timestamp:$timestamp,conv_title:$conv_title,input_kind:$input_kind}'
+  --arg origin "$ORIGIN" \
+  --arg entrypoint "$ENTRYPOINT" \
+  --arg host "$HOST" \
+  '{type:$type,session_id:$session_id,project:$project,cwd:$cwd,summary:$summary,timestamp:$timestamp,conv_title:$conv_title,input_kind:$input_kind,origin:$origin,entrypoint:$entrypoint,host:$host}'
 )
 
 # POST to pezant.ca relay — fail silently

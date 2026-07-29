@@ -102,15 +102,53 @@ npm run build:dmg  # Build .dmg installer
 main.js              # Electron main process — tray, window, notifications
 lib/
   auth.js            # Token loading and validation
-  format.js          # Notification formatting
+  format.js          # Notification formatting, origin normalization, mute predicate
+  origin.js          # Interactive-vs-system classification (also a CLI for the hook)
   poller.js          # Polls your-server.com relay for new events
   server.js          # Local HTTP server (testing/direct POST)
   updater.js         # Auto-update via electron-updater
 scripts/
-  claude-tray-hook.sh   # Claude Code hook — POSTs events to relay
-  generate-token.sh     # Creates shared auth token
-  install-mac.sh        # Build + install to /Applications
-  build-and-host.sh     # Build + upload to your-server.com
+  claude-tray-hook.sh     # Claude Code hook — POSTs events to relay
+  distill-transcript.py   # Reads a transcript into a scrubbed conversation (runs on the
+                          # machine that has the transcript, invoked by the relay)
+  generate-token.sh       # Creates shared auth token
+  install-mac.sh          # Build + install to /Applications
+  build-and-host.sh       # Build + upload to your-server.com
 assets/
   ghost-*.png        # Tray icons (idle/listening/unread states)
 ```
+
+### Interactive vs system sessions
+
+The Claude Code `Stop` hook fires identically for a session you are sitting in front of
+and for headless runners (scheduled agents, cron jobs, automated fix loops). Those
+runners heavily outnumber real sessions, so notifications that mattered were getting
+buried.
+
+Each event now carries an `origin`:
+
+- **`interactive`** — notifies normally (sound, alert, amber tray icon).
+- **`system`** — collected in a muted **System** tab. No sound, no alert, no tray change.
+  Toggle `Mute System Sessions` in the tray's right-click menu to watch a runner live.
+
+`lib/origin.js` decides, in order: a `CLAUDE_TRAY_ORIGIN` env override, the transcript's
+`entrypoint` field (`cli` = interactive, `sdk-cli` = headless), then the parent process
+command line (`-p`/`--print` = headless). If none of those answer it **fails closed to
+`system`** — a misfiled session costs you a ping you can still find in the System tab,
+whereas the reverse restores the problem this exists to solve.
+
+The working directory is deliberately *not* a signal: headless and interactive runs
+routinely share a cwd.
+
+### Reading a full conversation
+
+Clicking a notification opens the session window, which has a **Conversation** tab. The
+relay stores metadata only; the conversation body is pulled on demand from the machine
+that ran the session, so transcripts are never stored on the server. That machine can
+legitimately be offline, in which case the tab says so and offers a retry.
+
+`scripts/distill-transcript.py` does the reading. It excludes tool results, file
+contents, thinking blocks, and system reminders **at capture time**, then scrubs
+secret-shaped strings from what remains. Scrubbing only catches things that *look* like
+credentials, which is exactly why those categories are excluded wholesale rather than
+filtered afterwards.

@@ -1,5 +1,8 @@
 const list = document.getElementById('list');
 const sessionsList = document.getElementById('sessions-list');
+const systemList = document.getElementById('system-list');
+const systemBadge = document.getElementById('system-badge');
+const systemMuteToggle = document.getElementById('system-mute');
 
 const KIND_STYLES = {
   choice:   { cls: 'type-choice',   icon: '◆' },
@@ -28,6 +31,57 @@ tabs.forEach(tab => {
     }
   });
 });
+
+// --- System (muted) queue ---
+function renderSystem({ notifications, muted }) {
+  systemMuteToggle.checked = !!muted;
+
+  const count = notifications ? notifications.length : 0;
+  systemBadge.textContent = count > 99 ? '99+' : String(count);
+  systemBadge.className = count ? 'badge' : 'badge hidden';
+
+  if (!count) {
+    systemList.innerHTML = '<div class="empty">No system events yet</div>';
+    return;
+  }
+
+  systemList.innerHTML = notifications.map(n => {
+    const kind = n.inputKind || 'general';
+    const style = KIND_STYLES[kind] || KIND_STYLES.general;
+    const summary = n.summary
+      ? `<div class="summary">${escapeHtml(n.summary.slice(0, 120))}</div>`
+      : '';
+    const sessionAttr = n.sessionId ? ` data-session-id="${escapeHtml(n.sessionId)}"` : '';
+    return `
+      <div class="notification"${sessionAttr} style="cursor:pointer">
+        <div class="top">
+          <span class="conv-title">${escapeHtml(n.convTitle || n.project)}</span>
+          <span class="time">${formatTime(n.timestamp)}</span>
+        </div>
+        <div class="meta">
+          <span class="type ${style.cls}">${style.icon} ${escapeHtml(n.kindLabel || 'Finished')}</span>
+          <span class="project-tag">${escapeHtml(n.project)}</span>
+        </div>
+        ${summary}
+      </div>
+    `;
+  }).join('');
+}
+
+window.api.onSystemUpdated(renderSystem);
+
+systemList.addEventListener('click', (e) => {
+  const item = e.target.closest('.notification[data-session-id]');
+  if (!item) return;
+  window.api.openSessionDetail(item.dataset.sessionId);
+});
+
+systemMuteToggle.addEventListener('change', () => {
+  window.api.setSystemMuted(systemMuteToggle.checked);
+});
+
+// Pull initial state — the main process only pushes on change.
+window.api.getSystemNotifications().then(renderSystem).catch(() => {});
 
 // --- Connection status ---
 window.api.onConnectionStatus(({ connected, authExpired }) => {

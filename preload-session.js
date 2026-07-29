@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld('sessionApi', {
   },
   onSessionUpdated: (callback) => {
     ipcRenderer.on('session-updated', (_event, data) => callback(data));
-  }
+  },
+  fetchConversation: (sessionId) => ipcRenderer.invoke('fetch-conversation', sessionId)
 });
