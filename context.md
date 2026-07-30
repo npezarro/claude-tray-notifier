@@ -126,3 +126,24 @@ No installed app could auto-update. Two independent faults:
 - `latest-mac.yml` is edge-cacheable (observed 4h TTL), so a release can take up to that
   long to be noticed by clients unless purged. A CF cache rule bypassing
   `/downloads/latest-mac.yml` would remove the delay.
+
+### 2026-07-29 — manifest edge-caching solved without a purge token
+
+`latest-mac.yml` never changes filename, so the edge cache could hold it for the full TTL
+(observed `max-age=14400`) and clients would not notice a release for up to 4h.
+
+Fixed at the CDN instead of with a purge credential: the zone's existing **bypass** cache rule
+now also matches `http.request.uri.path eq "/downloads/latest-mac.yml"`. Verified
+`cf-cache-status: DYNAMIC` on the manifest, while versioned artifacts still cache normally
+(`MISS`→`HIT`) because their filenames are immutable.
+
+Consequence for the `Purge CDN cache` workflow step: it is now **optional hardening only**. The
+one case versioned URLs do not cover is re-publishing the SAME version — the filename is
+unchanged, so the edge keeps the old bytes and the new manifest's sha512 no longer matches,
+which makes electron-updater refuse to install. Bumping the version avoids that entirely and
+needs no credential. The step stays disabled (skips with a warning) unless
+`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID` are set.
+
+Note the CDN token in privateContext has **Cache Rules: Edit but not Cache Purge** — a purge
+call returns `code 10000 Authentication error`, which looks like a bad token but is a missing
+permission. Check a token's actual grants rather than inferring from its name.
