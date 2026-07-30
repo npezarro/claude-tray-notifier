@@ -2,7 +2,7 @@
 
 ## Current State
 - Electron menubar app for macOS, polls relay server for Claude Code session notifications
-- Version 1.9.1, unsigned macOS app with shell-based auto-update
+- Version 1.9.2, unsigned macOS app with shell-based auto-update
 - Relay runs inside pezant-tools PM2 process on VM (port 3003, Apache proxied at /api/notify)
 - Hook script at `scripts/claude-tray-hook.sh` sends notifications on Claude Code Stop and Notification events
 - Token auto-sync: right-click menu "Sync Token from Server" or auto-prompted on 401
@@ -147,3 +147,31 @@ needs no credential. The step stays disabled (skips with a warning) unless
 Note the CDN token in privateContext has **Cache Rules: Edit but not Cache Purge** — a purge
 call returns `code 10000 Authentication error`, which looks like a bad token but is a missing
 permission. Check a token's actual grants rather than inferring from its name.
+
+### 2026-07-30 — the updater bricked the app on the first successful update
+
+Updating 1.7.1 -> 1.9.1 left the app unable to launch. The published artifact was fine
+(sha512 matched the manifest, `zip -t` clean, bundle complete at 1.9.1 with every expected
+file). The installer was the problem:
+
+```bash
+unzip -o "$zip" -d "$appDir"     # merges INTO the existing bundle
+```
+
+electron-builder **ad-hoc code-signs** the mac build, and
+`Contents/_CodeSignature/CodeResources` hashes all 268 files in the bundle. `unzip -o`
+overwrites files but never removes ones the new version dropped, so leftovers from 1.7.1
+stayed behind, invalidated the signature, and macOS silently refused to launch. Output went
+to `/dev/null`, so the failure was invisible.
+
+Fixed by replacing the bundle wholesale: extract to a staging dir, verify the `.app` is
+inside, move the old bundle aside, move the new one in, and only then delete the old copy —
+so a mid-way failure restores the previous app instead of leaving a half-written one. Output
+now goes to `~/Library/Logs/claude-tray-notifier-update.log`.
+
+**Never `unzip -o` over a signed .app bundle.** It is not an update, it is a merge, and the
+result fails signature validation. Also never send an installer's output to `/dev/null`: a
+silent installer failure is indistinguishable from "nothing happened".
+
+This bug was latent since the shell-based installer was written; it only fired now because
+this was the first successful publish since April.
