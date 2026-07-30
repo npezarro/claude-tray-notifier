@@ -2,7 +2,7 @@
 
 ## Current State
 - Electron menubar app for macOS, polls relay server for Claude Code session notifications
-- Version 1.9.2, unsigned macOS app with shell-based auto-update
+- Version 1.9.3, unsigned macOS app with shell-based auto-update
 - Relay runs inside pezant-tools PM2 process on VM (port 3003, Apache proxied at /api/notify)
 - Hook script at `scripts/claude-tray-hook.sh` sends notifications on Claude Code Stop and Notification events
 - Token auto-sync: right-click menu "Sync Token from Server" or auto-prompted on 401
@@ -148,9 +148,16 @@ Note the CDN token in privateContext has **Cache Rules: Edit but not Cache Purge
 call returns `code 10000 Authentication error`, which looks like a bad token but is a missing
 permission. Check a token's actual grants rather than inferring from its name.
 
-### 2026-07-30 — the updater bricked the app on the first successful update
+### 2026-07-30 — updater hardening (NOT a fix for a real failure)
 
-Updating 1.7.1 -> 1.9.1 left the app unable to launch. The published artifact was fine
+**Correction to the first version of this note:** the app was never bricked. It is
+`LSUIElement: true` (menubar-only, no dock icon) and was simply hidden in the menu bar.
+1.7.1 -> 1.9.1 -> 1.9.2 all installed and ran correctly using the ORIGINAL `unzip -o`
+installer. The diagnosis below was reached without being able to test it, against evidence
+(intact artifact, matching sha512, complete bundle) that pointed the other way.
+
+Original (wrong) diagnosis, kept because the underlying hazard is real:
+updating 1.7.1 -> 1.9.1 appeared to leave the app unable to launch. The published artifact was fine
 (sha512 matched the manifest, `zip -t` clean, bundle complete at 1.9.1 with every expected
 file). The installer was the problem:
 
@@ -175,3 +182,23 @@ silent installer failure is indistinguishable from "nothing happened".
 
 This bug was latent since the shell-based installer was written; it only fired now because
 this was the first successful publish since April.
+
+### 2026-07-30 (later) — installer hardened, staging moved onto the app's filesystem
+
+`unzip -o` over a bundle is still not how you replace a signed .app: it merges, never
+removing files the new version dropped, so stale files accumulate and the ad-hoc
+`_CodeSignature/CodeResources` manifest covers every file in the bundle. That is a latent
+hazard worth removing even though it never actually broke an update here.
+
+The replacement stages in **the app's own parent directory**, not `/tmp`. `/tmp` is often a
+different filesystem, which turns the final `mv` into copy-then-delete: slow and non-atomic,
+so an interruption could leave a half-written bundle — i.e. the very failure the change was
+supposed to prevent. Same-filesystem renames are atomic. Falls back to `/tmp` with a logged
+WARN if the app directory is not writable.
+
+Also added a sanity gate: if the extracted bundle has no executable at
+`Contents/MacOS/<name>`, refuse the swap and leave the working app alone. Verified by dry
+run — a corrupt update exits non-zero with the original binary intact.
+
+Installer output goes to `~/Library/Logs/claude-tray-notifier-update.log`. The original sent
+it to `/dev/null`, which is why any real failure would have been undiagnosable.
