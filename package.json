@@ -39,7 +39,11 @@
       "index.html",
       "session-detail.html",
       "lib/**",
-      "assets/**"
+      "assets/**",
+      "scripts/distill-transcript.py"
+    ],
+    "asarUnpack": [
+      "scripts/distill-transcript.py"
     ],
     "directories": {
       "output": "dist"

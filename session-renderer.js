@@ -77,9 +77,10 @@ function renderTimeline(notifications) {
 
 // --- Conversation view ---------------------------------------------------
 //
-// The relay stores notification metadata only; the conversation body is pulled from the
-// machine that ran the session. That machine can legitimately be offline, so every
-// failure gets a plain-language explanation and a retry rather than a stuck spinner.
+// In local mode the transcript is read straight off this machine. With a relay it is
+// pulled from whichever machine ran the session, which can legitimately be offline. Either
+// way, every failure gets a plain-language explanation and a retry rather than a stuck
+// spinner — the two sets of error codes below are local-first, then relay-only.
 
 const conversationEl = document.getElementById('conversation');
 const timelineEl = document.getElementById('timeline');
@@ -88,6 +89,14 @@ let conversationLoaded = false;
 let conversationLoading = false;
 
 const ERROR_TEXT = {
+  // Local reads
+  not_found: ['Transcript not found', 'No log for this session on this machine. Without a relay, only sessions run here can be read.'],
+  no_python: ['python3 not found', 'The transcript reader needs python3. On macOS: xcode-select --install'],
+  bad_session_id: ['Bad session id', 'That session id is not a valid identifier.'],
+  distill_failed: ['Could not read it', 'The transcript may be empty, or still being written.'],
+  malformed_output: ['Unexpected output', 'The transcript reader returned something unreadable.'],
+  spawn_failed: ['Reader would not start', 'The transcript reader could not be launched.'],
+  // Relay reads
   worker_unreachable: ['That machine is offline', 'The conversation lives on the PC that ran this session, and it cannot be reached right now.'],
   worker_timeout: ['Timed out', 'That machine took too long to answer. It may be busy, or the tunnel is flaky.'],
   timeout: ['Timed out', 'The relay did not respond in time.'],
@@ -160,7 +169,7 @@ function renderConversation(conv) {
 async function loadConversation() {
   if (!currentSessionId || conversationLoaded || conversationLoading) return;
   conversationLoading = true;
-  conversationState('Loading conversation…', 'Fetching it from the machine that ran this session.', false);
+  conversationState('Loading conversation…', 'Reading the transcript for this session.', false);
   try {
     const result = await window.sessionApi.fetchConversation(currentSessionId);
     if (result && result.ok) {

@@ -9,3 +9,6 @@ dist/
 *.key
 __pycache__/
 *.pyc
+
+# Internal engineering notes — not part of the public project
+context.md

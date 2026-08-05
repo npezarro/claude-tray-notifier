@@ -1,6 +1,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const EventEmitter = require('events');
+const http = require('http');
 const https = require('https');
 
 // Monkey-patch https.request for testing
@@ -38,7 +39,7 @@ function restoreMock() {
   https.request = originalRequest;
 }
 
-const { Poller } = require('../lib/poller');
+const { Poller, transportFor } = require('../lib/poller');
 
 describe('Poller', () => {
   beforeEach(() => {
@@ -316,5 +317,45 @@ describe('Poller', () => {
       assert.strictEqual(received.length, 0);
       restoreMock();
     });
+  });
+});
+
+// Regression: this module hardcoded `https`, so a relay on http:// (the only practical
+// way to self-host locally, and the only way to exercise the poll path in a test) threw
+// ERR_INVALID_PROTOCOL before any request was made.
+describe('transport selection', () => {
+  it('uses http for an http:// relay', () => {
+    assert.strictEqual(transportFor(new URL('http://127.0.0.1:9377/api/notify/poll')), http);
+  });
+
+  it('uses https for an https:// relay', () => {
+    assert.strictEqual(transportFor(new URL('https://relay.example.com/api/notify/poll')), https);
+  });
+
+  it('polls an http relay without throwing on protocol', async () => {
+    const originalHttpRequest = http.request;
+    let called = false;
+    http.request = function (url, options, callback) {
+      called = true;
+      const req = new EventEmitter();
+      req.end = () => {
+        const res = new EventEmitter();
+        res.statusCode = 200;
+        process.nextTick(() => {
+          callback(res);
+          res.emit('data', '{"notifications":[]}');
+          res.emit('end');
+        });
+      };
+      return req;
+    };
+    try {
+      const p = new Poller('http://127.0.0.1:9377', 'tok', () => {});
+      p.poll();
+      await new Promise((r) => setTimeout(r, 20));
+      assert.ok(called, 'the http module should have handled an http:// URL');
+    } finally {
+      http.request = originalHttpRequest;
+    }
   });
 });

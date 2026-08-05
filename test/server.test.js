@@ -155,3 +155,62 @@ describe('server', () => {
     assert.strictEqual(res.status, 404);
   });
 });
+
+// The tray menu can regenerate the token while this server is listening. In local mode
+// the server IS the delivery path, and the hook fails silently by design, so a stale
+// captured token would make every notification vanish with no error surfaced anywhere.
+describe('server — token getter', () => {
+  let liveToken;
+  let s;
+  let p;
+  const got = [];
+
+  beforeEach((_, done) => {
+    liveToken = 'first-token-value';
+    got.length = 0;
+    s = createServer(0, () => liveToken, (payload) => got.push(payload));
+    s.on('listening', () => { p = s.address().port; done(); });
+  });
+
+  afterEach((_, done) => { s.close(done); });
+
+  function post(token) {
+    return new Promise((resolve, reject) => {
+      const payload = JSON.stringify({ type: 'stop', project: 'demo' });
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: p,
+        path: '/notify',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          Authorization: `Bearer ${token}`
+        }
+      }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  it('accepts the current token', async () => {
+    assert.equal(await post('first-token-value'), 200);
+    assert.equal(got.length, 1);
+  });
+
+  it('accepts a token regenerated after the server started', async () => {
+    liveToken = 'second-token-value';
+    assert.equal(await post('second-token-value'), 200);
+    assert.equal(got.length, 1);
+  });
+
+  it('rejects the superseded token', async () => {
+    liveToken = 'second-token-value';
+    assert.equal(await post('first-token-value'), 401);
+    assert.equal(got.length, 0);
+  });
+});

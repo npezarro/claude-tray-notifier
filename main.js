@@ -1,4 +1,5 @@
 const { app, Notification, Tray, Menu, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
@@ -11,6 +12,7 @@ const {
   formatNotification, buildHistoryEntry, MAX_NOTIFICATIONS, normalizeOrigin, shouldNotify, SYSTEM
 } = require('./lib/format');
 const { setupAutoUpdater, checkForUpdatesManual } = require('./lib/updater');
+const { readLocalConversation } = require('./lib/conversation');
 const sessionRegistry = require('./lib/sessions');
 
 const PORT = 9377;
@@ -34,10 +36,16 @@ const TRAY_STATE = { IDLE: 'idle', LISTENING: 'listening', UNREAD: 'unread' };
 let hasUnread = false;
 let isConnected = false;
 
+// Local mode: no relay is configured, so the Claude Code hook POSTs straight to the local
+// server on PORT. There is nothing to poll and nothing to be disconnected from, so the
+// relay-shaped connection states do not apply.
+let localMode = false;
+
 let tray = null;
 let dropdownWindow = null;
 let token;
 let activePoller = null;
+let localServer = null;
 
 function trayIcon(state) {
   const name = `ghost-${state}.png`;
@@ -51,6 +59,11 @@ function setTrayState(state) {
 }
 
 let authExpired = false;
+
+function connectionLabel() {
+  if (localMode) return `Listening locally on port ${PORT}`;
+  return isConnected ? 'Connected to relay' : 'Disconnected';
+}
 
 function pushConnectionStatus() {
   if (dropdownWindow && !dropdownWindow.isDestroyed()) {
@@ -266,25 +279,28 @@ function setSystemMuted(next) {
 }
 
 /**
- * Fetch a session's full conversation from the relay.
+ * Fetch a session's full conversation.
  *
- * The relay does not store conversation text; it pulls it from the machine that produced
- * the session. That means this can legitimately fail (that machine may be off), so the
- * renderer is given a structured error to display rather than a bare rejection.
+ * Local mode reads the transcript directly, since it is on this machine by definition.
+ * With a relay, the session may have run elsewhere: the relay stores no conversation text
+ * and pulls it from the originating machine, which can legitimately be offline. Either
+ * way the renderer gets a structured error to display rather than a bare rejection.
  */
 function fetchConversation(sessionId) {
+  const relayUrl = loadRelayUrl();
+  if (!relayUrl) {
+    return readLocalConversation(sessionId);
+  }
+
   return new Promise((resolve) => {
-    const relayUrl = loadRelayUrl();
-    if (!relayUrl) {
-      return resolve({ ok: false, error: 'no_relay', message: 'No relay URL configured' });
-    }
     if (!token) {
       return resolve({ ok: false, error: 'no_token', message: 'No auth token configured' });
     }
 
     const base = relayUrl.replace(/\/$/, '');
     const url = new URL(`${base}/api/notify/conversation/${encodeURIComponent(sessionId)}`);
-    const req = https.request(url, {
+    const transport = url.protocol === 'http:' ? http : https;
+    const req = transport.request(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       timeout: 30000
@@ -388,7 +404,39 @@ function syncTokenFromServer() {
 function saveToken(newToken) {
   const configDir = path.join(os.homedir(), '.config', 'claude-tray');
   fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(path.join(configDir, 'token'), newToken.trim());
+  // 0600 to match generate-token.sh — this is a shared secret, and any local process that
+  // can read it can post notifications as the user.
+  fs.writeFileSync(path.join(configDir, 'token'), newToken.trim(), { mode: 0o600 });
+}
+
+/**
+ * Bring the app up for whichever mode is configured.
+ *
+ * Local mode is the default: with no relay URL on disk there is nothing to poll, so the
+ * app would otherwise sit on the gray idle icon forever while quietly working fine. The
+ * local server is the delivery path, so once it is listening the app genuinely is.
+ */
+function startListening(activeToken) {
+  if (!localServer) {
+    // A getter, not the value: the token can be regenerated from the tray menu while this
+    // server is listening, and it must start accepting the new one immediately.
+    localServer = createServer(PORT, () => token, (payload) => {
+      showNotification(payload);
+    });
+  }
+
+  if (loadRelayUrl()) {
+    localMode = false;
+    startPoller(activeToken);
+    return;
+  }
+
+  localMode = true;
+  isConnected = true;
+  authExpired = false;
+  if (!hasUnread) setTrayState(TRAY_STATE.LISTENING);
+  pushConnectionStatus();
+  console.log(`Local mode — listening on http://127.0.0.1:${PORT}/notify`);
 }
 
 function startPoller(pollerToken) {
@@ -438,12 +486,16 @@ function promptForToken() {
     webPreferences: { nodeIntegration: true, contextIsolation: false }
   });
 
+  // In local mode the token is just a shared secret between the hook and this app, so
+  // there is nothing to paste in from anywhere — Generate is the normal path. Pasting
+  // only matters when a relay issued the token.
   const html = `
     <html><body style="font-family:-apple-system,sans-serif;background:#1e1e1e;color:#e0e0e0;padding:20px;display:flex;flex-direction:column;gap:12px">
-      <label style="font-size:13px">Paste your auth token:</label>
+      <label style="font-size:13px">Paste an auth token, or generate one for local use:</label>
       <input id="t" style="width:100%;padding:8px;border:1px solid #555;border-radius:4px;background:#2a2a2a;color:#e0e0e0;font-family:monospace;font-size:12px" autofocus>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button onclick="require('electron').ipcRenderer.send('token-cancel')" style="padding:6px 16px;border:1px solid #555;border-radius:4px;background:#333;color:#e0e0e0;cursor:pointer">Cancel</button>
+        <button onclick="require('electron').ipcRenderer.send('token-generate')" style="padding:6px 16px;border:1px solid #555;border-radius:4px;background:#333;color:#e0e0e0;cursor:pointer">Generate</button>
         <button onclick="require('electron').ipcRenderer.send('token-submit',document.getElementById('t').value)" style="padding:6px 16px;border:none;border-radius:4px;background:#4a9eff;color:#fff;cursor:pointer">Save</button>
       </div>
       <script>document.getElementById('t').addEventListener('keydown',e=>{if(e.key==='Enter')require('electron').ipcRenderer.send('token-submit',document.getElementById('t').value)})</script>
@@ -451,22 +503,36 @@ function promptForToken() {
 
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
-  const onSubmit = (_e, val) => {
-    if (val && val.trim()) {
-      token = val.trim();
-      saveToken(token);
-      startPoller(token);
-    }
+  const accept = (value) => {
+    token = value;
+    saveToken(token);
+    startListening(token);
     win.close();
     cleanup();
+  };
+
+  const onSubmit = (_e, val) => {
+    if (val && val.trim()) return accept(val.trim());
+    win.close();
+    cleanup();
+  };
+  const onGenerate = () => {
+    // Same shape generate-token.sh produces, so the two paths are interchangeable.
+    accept(crypto.randomBytes(32).toString('hex'));
+    new Notification({
+      title: 'Token Generated',
+      body: 'Saved to ~/.config/claude-tray/token — the hook reads it from there.'
+    }).show();
   };
   const onCancel = () => { win.close(); cleanup(); };
   const cleanup = () => {
     ipcMain.removeListener('token-submit', onSubmit);
+    ipcMain.removeListener('token-generate', onGenerate);
     ipcMain.removeListener('token-cancel', onCancel);
   };
 
   ipcMain.once('token-submit', onSubmit);
+  ipcMain.once('token-generate', onGenerate);
   ipcMain.once('token-cancel', onCancel);
 }
 
@@ -492,7 +558,7 @@ app.whenReady().then(() => {
     const sessionCount = sessionRegistry.size();
     const contextMenu = Menu.buildFromTemplate([
       { label: `Claude Tray Notifier v${require('./package.json').version}`, enabled: false },
-      { label: isConnected ? 'Connected to relay' : 'Disconnected', enabled: false },
+      { label: connectionLabel(), enabled: false },
       { label: `${sessionCount} session${sessionCount !== 1 ? 's' : ''} tracked`, enabled: false },
       { type: 'separator' },
       { label: `${unreadCount} unread`, enabled: false },
@@ -519,7 +585,10 @@ app.whenReady().then(() => {
       }},
       { type: 'separator' },
       { label: 'Set Auth Token...', click: () => promptForToken() },
-      { label: 'Sync Token from Server', click: () => syncTokenFromServer() },
+      // Token sync is a relay feature — it opens the relay's token page and takes the new
+      // token back on a loopback callback. In local mode there is no server to sync from,
+      // and offering it would just produce an error dialog.
+      ...(localMode ? [] : [{ label: 'Sync Token from Server', click: () => syncTokenFromServer() }]),
       { label: 'Check for Updates', click: () => checkForUpdatesManual() },
       { label: 'Quit', click: () => app.quit() }
     ]);
@@ -529,12 +598,10 @@ app.whenReady().then(() => {
   // Pre-create the dropdown window
   createWindow();
 
-  // Start local HTTP server (for direct testing)
+  // The local server always runs: it is the delivery path in local mode, and a direct
+  // POST target for testing when a relay is configured.
   if (token) {
-    createServer(PORT, token, (payload) => {
-      showNotification(payload);
-    });
-    startPoller(token);
+    startListening(token);
   } else {
     console.log('No token configured — use Set Auth Token in the menu');
     promptForToken();
@@ -547,8 +614,7 @@ app.whenReady().then(() => {
   setInterval(() => sessionRegistry.pruneOld(), 60 * 60 * 1000);
 
   console.log('Claude Tray Notifier ready');
-  console.log(`Local server: 127.0.0.1:${PORT}`);
-  console.log('Polling relay server every 2s');
+  console.log(`Local server: http://127.0.0.1:${PORT}/notify`);
 });
 
 // IPC handlers

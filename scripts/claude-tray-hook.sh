@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Code hook script — POSTs to pezant.ca relay for the tray notifier
+# Claude Code hook script — POSTs session events to the tray notifier.
 # Usage: cat | claude-tray-hook.sh <stop|notification>
 set -uo pipefail
 
@@ -9,7 +9,11 @@ EVENT_TYPE="${1:-stop}"
 [ -z "${CLAUDE_TRAY_NOTIFY_URL:-}" ] && [ -f "$HOME/.env" ] && source "$HOME/.env" 2>/dev/null
 
 TOKEN_PATH="${CLAUDE_TRAY_TOKEN_PATH:-$HOME/.config/claude-tray/token}"
-NOTIFY_URL="${CLAUDE_TRAY_NOTIFY_URL:-}"
+
+# Default to the app's own loopback server. That is the whole setup for a single machine:
+# no relay, no server to run, nothing to configure. Point CLAUDE_TRAY_NOTIFY_URL at a
+# relay's /api/notify endpoint only when notifications have to cross machines.
+NOTIFY_URL="${CLAUDE_TRAY_NOTIFY_URL:-http://127.0.0.1:9377/notify}"
 [ -z "$NOTIFY_URL" ] && exit 0
 TITLE_CACHE_DIR="$HOME/.cache/claude-tray-titles"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,7 +124,8 @@ PAYLOAD=$(jq -n \
   '{type:$type,session_id:$session_id,project:$project,cwd:$cwd,summary:$summary,timestamp:$timestamp,conv_title:$conv_title,input_kind:$input_kind,origin:$origin,entrypoint:$entrypoint,host:$host}'
 )
 
-# POST to pezant.ca relay — fail silently
+# POST the event — fail silently. A hook must never make Claude Code wait on, or fail
+# because of, a notifier that is closed or unreachable.
 curl -s -X POST "$NOTIFY_URL" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \

@@ -70,15 +70,25 @@ jobs:
 
           SSH_TARGET_HOST="${VM_SSH_HOST:-$VM_HOST}"
 
-          # Fail loudly on missing configuration instead of surfacing a confusing
-          # connection error several commands later.
+          # Self-hosted publishing is optional. A fork has none of these secrets and is not
+          # trying to upload anywhere, so skip rather than fail: the build already ran, and
+          # the artifacts are attached to the run by a later step.
+          #
+          # A PARTIAL configuration is still an error. That means someone intended to
+          # publish and got it wrong, and a silent skip there is how a release quietly stops
+          # shipping for months.
           missing=""
           [ -z "$VM_SSH_KEY" ]       && missing="$missing VM_SSH_KEY"
           [ -z "$SSH_TARGET_HOST" ]  && missing="$missing VM_SSH_HOST/VM_HOST"
           [ -z "$VM_USER" ]          && missing="$missing VM_USER"
           [ -z "$REMOTE_DIR" ]       && missing="$missing VM_REMOTE_DIR"
+
+          if [ -z "$VM_SSH_KEY" ] && [ -z "$SSH_TARGET_HOST" ] && [ -z "$VM_USER" ] && [ -z "$REMOTE_DIR" ]; then
+            echo "::warning::No upload secrets configured — skipping publish. Set VM_SSH_KEY, VM_SSH_HOST, VM_USER and VM_REMOTE_DIR to publish to your own host. Build artifacts are attached to this run."
+            exit 0
+          fi
           if [ -n "$missing" ]; then
-            echo "::error::Missing required secret(s):$missing"
+            echo "::error::Publishing is partially configured. Missing secret(s):$missing"
             exit 1
           fi
 

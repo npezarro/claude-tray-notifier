@@ -1,90 +1,170 @@
 # Claude Tray Notifier
 
-System tray notifier for Claude Code CLI sessions. Sits in the macOS menu bar as a ghost icon and delivers native notifications when Claude needs attention — session complete, input needed, errors, etc.
+macOS menu bar notifier for Claude Code CLI sessions. Sits in the menu bar as a ghost icon
+and fires a native notification when a session finishes or needs input, with enough context
+to know whether it is worth switching to: project, conversation title, and what kind of
+input is wanted.
 
-## How It Works
+Click a notification to open the session, including a scrubbed transcript of the
+conversation.
 
-```
-Claude Code CLI hook → your-server.com relay server → Electron poller (2s) → native macOS notification
-```
+## Requirements
 
-The Claude Code `stop` hook (`scripts/claude-tray-hook.sh`) POSTs session events to a relay endpoint on your-server.com. The Electron app polls that endpoint and displays native notifications with context about what happened (project name, conversation title, input type).
+- macOS (Apple Silicon or Intel)
+- Node.js 20+
+- Claude Code CLI
+- `python3` for the Conversation tab (`xcode-select --install` if missing)
 
-### Tray States
-
-| Icon | State | Meaning |
-|------|-------|---------|
-| Gray ghost | Idle | App running, not yet connected |
-| Green ghost | Listening | Connected to relay, polling |
-| Amber ghost | Unread | New notification(s) — click to view |
-
-Clicking the tray icon opens a dropdown showing notification history. Right-click for quick actions (mark read, clear, check for updates, quit).
-
-## Setup
-
-### 1. Generate auth token
+## Install
 
 ```bash
-./scripts/generate-token.sh
-```
-
-This creates a shared secret at `~/.config/claude-tray/token`. Override with `CLAUDE_TRAY_TOKEN_PATH` env var.
-
-### 2. Install the app
-
-```bash
+git clone https://github.com/npezarro/claude-tray-notifier.git
+cd claude-tray-notifier
 ./scripts/install-mac.sh
 ```
 
-This builds the Electron app, copies it to `/Applications`, and sets up a LaunchAgent so it starts on login.
+That generates an auth token, builds the app, installs it to `/Applications`, and adds a
+LaunchAgent so it starts on login. It ends by printing a hooks block.
 
-### 3. Configure Claude Code hook
-
-Add to your Claude Code `settings.json` hooks:
+**You must add that block to `~/.claude/settings.json`, or nothing will ever reach the
+app.** It looks like this, with the path pointing at wherever you cloned the repo:
 
 ```json
 {
   "hooks": {
-    "stop": [
-      {
-        "command": "cat | ~/repos/claude-tray-notifier/scripts/claude-tray-hook.sh stop"
-      }
+    "Stop": [
+      { "hooks": [ { "type": "command",
+        "command": "/path/to/claude-tray-notifier/scripts/claude-tray-hook.sh stop" } ] }
     ],
-    "notification": [
-      {
-        "command": "cat | ~/repos/claude-tray-notifier/scripts/claude-tray-hook.sh notification"
-      }
+    "Notification": [
+      { "hooks": [ { "type": "command",
+        "command": "/path/to/claude-tray-notifier/scripts/claude-tray-hook.sh notification" } ] }
     ]
   }
 }
 ```
 
-## Updating
+Start a Claude Code session and finish a turn. The ghost should turn amber.
 
-Configure the auto-update URL (where `latest-mac.yml` and the `.zip` are hosted):
+The build is unsigned, so macOS may quarantine it on first launch. Right-click the app in
+`/Applications` and choose Open, or run
+`xattr -dr com.apple.quarantine "/Applications/Claude Tray Notifier.app"`.
 
-```bash
-echo "https://your-server.com/downloads/" > ~/.config/claude-tray/update-url
+## How it works
+
+By default everything stays on one machine:
+
+```
+Claude Code hook → http://127.0.0.1:9377/notify → tray app → native notification
 ```
 
-The app checks for updates automatically on startup and every 4 hours. When an update is available, you'll get a notification — click "Restart" to apply it.
+The app runs a loopback HTTP server on port 9377. The `Stop` and `Notification` hooks POST
+a small JSON event to it, authenticated with a shared token at
+`~/.config/claude-tray/token` (generated at install; override the location with
+`CLAUDE_TRAY_TOKEN_PATH`). Nothing leaves the machine and there is no server to run.
 
-You can also check manually: **right-click tray icon → Check for Updates**.
+### Tray states
 
-### Manual update
+| Icon | State | Meaning |
+|------|-------|---------|
+| Gray ghost | Idle | No token configured, or auth failed |
+| Green ghost | Listening | Ready and receiving |
+| Amber ghost | Unread | New notification(s) — click to view |
 
-```bash
-cd ~/repos/claude-tray-notifier
-git pull
-./scripts/install-mac.sh
+Left-click opens notification history. Right-click gives quick actions (mark read, clear,
+mute system sessions, set token, check for updates, quit).
+
+### Interactive vs system sessions
+
+The `Stop` hook fires identically for a session you are sitting in front of and for
+headless runners (scheduled agents, cron jobs, automated fix loops). Runners can easily
+outnumber real sessions, burying the notifications that mattered.
+
+Each event carries an `origin`:
+
+- **`interactive`** — notifies normally (sound, alert, amber tray icon).
+- **`system`** — collected in a muted **System** tab. No sound, no alert, no tray change.
+  Toggle `Mute System Sessions` in the right-click menu to watch a runner live.
+
+`lib/origin.js` decides, in order: a `CLAUDE_TRAY_ORIGIN` env override, the transcript's
+`entrypoint` field (`cli` = interactive, `sdk-cli` = headless), then the parent process
+command line (`-p`/`--print` = headless). If none of those answer it **fails closed to
+`system`** — a misfiled session costs a ping you can still find in the System tab, whereas
+the reverse restores the problem this exists to solve.
+
+The working directory is deliberately *not* a signal: headless and interactive runs
+routinely share a cwd.
+
+### Reading a conversation
+
+Clicking a notification opens the session window, which has a **Conversation** tab.
+`scripts/distill-transcript.py` reads the transcript out of `~/.claude/projects` and
+returns it as compact JSON.
+
+It excludes tool results, file contents, thinking blocks, and system reminders **at capture
+time**, then scrubs secret-shaped strings from what remains. Scrubbing only catches things
+that *look* like credentials, which is exactly why those categories are dropped wholesale
+rather than filtered afterwards.
+
+## Multi-machine setup (optional, relay not included)
+
+Local mode only notifies you about sessions on the machine running the app. To collect
+sessions from several machines (a remote VM, a second laptop) you need a relay: a small
+authenticated HTTP service both ends can reach.
+
+**This repo does not ship a relay.** You have to run your own. Point the app at it by
+writing the base URL to `~/.config/claude-tray/relay-url`, and point the hook at it with
+`CLAUDE_TRAY_NOTIFY_URL=https://your-relay.example.com/api/notify`.
+
+A relay has to implement three endpoints, all taking `Authorization: Bearer <token>` with
+the same token the hook uses:
+
+**`POST /api/notify`** — receives an event from the hook. Store it. The body is:
+
+```json
+{
+  "type": "stop",
+  "session_id": "uuid",
+  "project": "my-repo",
+  "cwd": "/path/to/project",
+  "summary": "first 200 chars of the last assistant message",
+  "timestamp": "2026-08-05T12:00:00Z",
+  "conv_title": "Fix the login redirect",
+  "input_kind": "general",
+  "origin": "interactive",
+  "entrypoint": "cli",
+  "host": "hostname"
+}
 ```
 
-## Publishing a New Version
+**`GET /api/notify/poll?since=<iso8601>`** (or `?last=<n>` on the first call) — returns
+events newer than `since`. The app polls this every 2s:
 
-1. Bump version in `package.json`
-2. Run `./scripts/build-and-host.sh`
-3. The script builds the `.dmg` and `.zip`, then uploads both plus `latest-mac.yml` to your-server.com
-4. Running instances will auto-detect the update within 4 hours
+```json
+{ "notifications": [ /* event objects as above */ ] }
+```
+
+Return `401` for a bad token; after 3 consecutive 401s the app prompts to re-auth.
+
+**`GET /api/notify/conversation/:sessionId`** — returns the distilled conversation, in the
+shape `scripts/distill-transcript.py` emits. Since a session may have run on a different
+machine, a relay cannot answer this from its own disk. The sane implementation is to reach
+back to the originating machine and run the distiller there, so conversation text is never
+stored on the relay. Non-200 responses should carry `{"error": "...", "message": "..."}`;
+the app displays `message` verbatim.
+
+Two optional extras, both relay-only:
+
+- `GET /tools/claude-tray-token?callback=<loopback-url>` backs the **Sync Token from
+  Server** menu item. It should redirect to `<callback>?token=<new-token>` after
+  authenticating the user. The menu item is hidden in local mode.
+- Auto-update: write a base URL to `~/.config/claude-tray/update-url` where
+  `latest-mac.yml` and the release `.zip` are hosted, and the app will check on startup and
+  every 4 hours.
+
+The session id is passed to the distiller on **stdin, never argv**. If your relay invokes
+it over SSH, keep that: `ssh` joins trailing argv into one string that the *remote* shell
+re-parses, so an argv-passed id is shell-injectable even through `execFile`.
 
 ## Development
 
@@ -92,63 +172,43 @@ git pull
 npm install
 npm start          # Run in dev mode
 npm test           # Run tests
+npm run lint
 npm run build:dir  # Build .app without packaging
 npm run build:dmg  # Build .dmg installer
 ```
 
-### Project Structure
+Publishing your own builds needs a host you control. `scripts/build-and-host.sh` and
+`.github/workflows/build-and-publish.yml` upload over SSH and expect `VM_SSH_HOST`,
+`VM_USER`, `VM_REMOTE_DIR`, `VM_SSH_KEY`, and `PUBLIC_DOWNLOAD_URL`. Without those secrets
+the publish job skips itself; tests and lint still run.
+
+### Project structure
 
 ```
 main.js              # Electron main process — tray, window, notifications
 lib/
   auth.js            # Token loading and validation
+  conversation.js    # Local transcript reads (runs the distiller)
   format.js          # Notification formatting, origin normalization, mute predicate
   origin.js          # Interactive-vs-system classification (also a CLI for the hook)
-  poller.js          # Polls your-server.com relay for new events
-  server.js          # Local HTTP server (testing/direct POST)
+  poller.js          # Relay polling (multi-machine setups only)
+  server.js          # Loopback HTTP server — the local-mode delivery path
+  sessions.js        # In-memory session registry
   updater.js         # Auto-update via electron-updater
 scripts/
-  claude-tray-hook.sh     # Claude Code hook — POSTs events to relay
-  distill-transcript.py   # Reads a transcript into a scrubbed conversation (runs on the
-                          # machine that has the transcript, invoked by the relay)
-  generate-token.sh       # Creates shared auth token
+  claude-tray-hook.sh     # Claude Code hook — POSTs events
+  distill-transcript.py   # Transcript → scrubbed conversation JSON
+  generate-token.sh       # Creates the shared auth token
   install-mac.sh          # Build + install to /Applications
-  build-and-host.sh       # Build + upload to your-server.com
+  build-and-host.sh       # Build + upload to your own host
 assets/
   ghost-*.png        # Tray icons (idle/listening/unread states)
 ```
 
-### Interactive vs system sessions
+`scripts/distill-transcript.py` is listed in both `build.files` and `build.asarUnpack`. It
+has to exist as a real file on disk — an external interpreter cannot read a path inside
+`app.asar`.
 
-The Claude Code `Stop` hook fires identically for a session you are sitting in front of
-and for headless runners (scheduled agents, cron jobs, automated fix loops). Those
-runners heavily outnumber real sessions, so notifications that mattered were getting
-buried.
+## License
 
-Each event now carries an `origin`:
-
-- **`interactive`** — notifies normally (sound, alert, amber tray icon).
-- **`system`** — collected in a muted **System** tab. No sound, no alert, no tray change.
-  Toggle `Mute System Sessions` in the tray's right-click menu to watch a runner live.
-
-`lib/origin.js` decides, in order: a `CLAUDE_TRAY_ORIGIN` env override, the transcript's
-`entrypoint` field (`cli` = interactive, `sdk-cli` = headless), then the parent process
-command line (`-p`/`--print` = headless). If none of those answer it **fails closed to
-`system`** — a misfiled session costs you a ping you can still find in the System tab,
-whereas the reverse restores the problem this exists to solve.
-
-The working directory is deliberately *not* a signal: headless and interactive runs
-routinely share a cwd.
-
-### Reading a full conversation
-
-Clicking a notification opens the session window, which has a **Conversation** tab. The
-relay stores metadata only; the conversation body is pulled on demand from the machine
-that ran the session, so transcripts are never stored on the server. That machine can
-legitimately be offline, in which case the tab says so and offers a retry.
-
-`scripts/distill-transcript.py` does the reading. It excludes tool results, file
-contents, thinking blocks, and system reminders **at capture time**, then scrubs
-secret-shaped strings from what remains. Scrubbing only catches things that *look* like
-credentials, which is exactly why those categories are excluded wholesale rather than
-filtered afterwards.
+MIT. See [LICENSE](LICENSE).
