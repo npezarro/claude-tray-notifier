@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.0",
-    "menubar": "^5.2.3"
+    "menubar": "^9.5.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
